@@ -1,0 +1,39 @@
+use serenity::builder::CreateApplicationCommand;
+use serenity::client::Context;
+use serenity::model::Permissions;
+use serenity::model::prelude::command::CommandType;
+use serenity::model::prelude::interaction::InteractionResponseType;
+use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+
+use crate::commands::bet::CtxState;
+
+pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
+    let data = ctx.data.read().await;
+
+    if let Some(state) = data.get::<CtxState>() {
+        let mut state = state.write().await;
+        if matches!(int.data.target_id, Some(id) if id.as_u64() == state.msg.0.as_u64()) {
+            if let Some(stopper) = state.stopper.take() {
+                stopper.send(()).unwrap();
+                int.create_interaction_response(&ctx.http, |data| {
+                    data.kind(InteractionResponseType::ChannelMessageWithSource)
+                        .interaction_response_data(|m| m.ephemeral(true).content("Bets stopped!"))
+                }).await?;
+                return Ok(());
+            }
+        }
+    }
+
+    int.create_interaction_response(&ctx.http, |data| {
+        data.kind(InteractionResponseType::ChannelMessageWithSource)
+            .interaction_response_data(|m| m.ephemeral(true).content("This message isn't a current, running, unstopped bet"))
+    }).await?;
+
+    Ok(())
+}
+
+pub fn register(cmnd: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand {
+    cmnd.kind(CommandType::Message)
+        .default_member_permissions(Permissions::MANAGE_GUILD)
+        .name("Stop accepting bets")
+}
