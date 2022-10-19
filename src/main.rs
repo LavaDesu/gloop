@@ -13,7 +13,6 @@ use serenity::prelude::*;
 use sqlx::{sqlite::SqlitePoolOptions, Sqlite, Pool, migrate::Migrator};
 use tokio::try_join;
 use tracing::{error, info, warn, trace};
-use tracing_subscriber::filter::Directive;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 struct Database;
@@ -31,14 +30,15 @@ struct Handler;
 impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, int: Interaction) {
         if let Interaction::ApplicationCommand(cmd) = int {
-            trace!("Received interaction: {:#?}", cmd);
+            use commands::*;
 
+            trace!("Received interaction: {:#?}", cmd);
             let run = cmdmatch!(ctx, cmd, [
                 bet,
-                bet_admin_stopper("Stop accepting bets"),
-                bet_admin_ender("End and finalise bets"),
+                bet_admin_stopper["Stop accepting bets"],
+                bet_admin_ender["End and finalise bets"],
                 buttontest,
-                profile("coins"),
+                profile["coins"],
             ]);
 
             if let Err(why) = run
@@ -58,6 +58,7 @@ impl EventHandler for Handler {
                 .expect("BLOB_DEV_GUILD must be an integer"),
         );
 
+        use commands::*;
         let gcmds = GuildId::set_application_commands(&guild_id, &ctx.http, |builder| cmdcreate!(builder, [
             bet,
             bet_admin_stopper,
@@ -72,20 +73,6 @@ impl EventHandler for Handler {
 }
 
 fn setup_tracing() -> anyhow::Result<()> {
-    /*
-    let offset = UtcOffset::current_local_offset()?;
-    let timer = OffsetTime::new(offset, format_description!("[hour]:[minute]:[second]"));
-    tracing_subscriber::registry()
-        .with(fmt::layer()
-              .compact()
-              .with_timer(timer))
-        .with(EnvFilter::builder()
-              .with_default_directive("sinuous=info".parse()?)
-              .from_env()?
-        )
-        .init();
-    */
-
     tracing_subscriber::registry()
         .with(fmt::layer().compact())
         .with(EnvFilter::builder()
