@@ -98,7 +98,7 @@ async fn setup_db(url: String) -> anyhow::Result<Pool<Sqlite>> {
     }
     #[cfg(not(debug_assertions))]
     {
-        migration_path = std::env::current_exe()?.join("./migrations");
+        migration_path = std::env::current_dir()?.join("./migrations");
     }
 
     Migrator::new(migration_path).await?.run(&pool).await?;
