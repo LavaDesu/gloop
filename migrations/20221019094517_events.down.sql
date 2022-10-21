@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS bets_events;
+DROP TABLE IF EXISTS bets;

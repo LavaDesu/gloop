@@ -11,7 +11,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .interaction_response_data(|m| m.ephemeral(true))
     }).await?;
 
-    let discord_id = *int.user.id.as_u64() as i64;
+    let discord_id: i64 = int.user.id.into();
     let data = ctx.data.read().await;
     let db = data.get::<Database>().unwrap();
     sqlx::query!(
@@ -36,13 +36,13 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     drop(data);
 
     int.create_followup_message(&ctx.http, |resp| {
-        resp.content(format!("You have {} coins", res.coins))
+        resp.content(format!("You have {} koins", res.coins))
     }).await?;
 
     Ok(())
 }
 
 pub fn register(command: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand {
-    command.name("coins").description("see coins")
+    command.name("koins").description("Check your balance of Cambodia Osu Cup Koins")
 }
 

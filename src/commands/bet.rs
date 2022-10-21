@@ -1,9 +1,8 @@
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rosu_v2::Osu;
 use serenity::builder::{CreateEmbed, CreateApplicationCommand, CreateComponents};
+use serenity::collector::CollectModalInteraction;
 use serenity::futures::StreamExt;
 use serenity::model::Permissions;
 use serenity::model::id::{MessageId, ChannelId, UserId};
@@ -16,12 +15,12 @@ use serenity::model::prelude::interaction::message_component::MessageComponentIn
 use serenity::model::prelude::interaction::modal::ModalSubmitInteraction;
 use serenity::prelude::*;
 use serenity::utils::Colour;
+use sqlx::{Pool, Sqlite};
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::oneshot::{self, Sender};
-use tokio::time::{interval, MissedTickBehavior};
 use tracing::{info_span, Instrument};
 
-use crate::{Database, OsuData};
+use crate::Database;
 
 pub struct CtxState;
 
@@ -29,95 +28,92 @@ impl TypeMapKey for CtxState {
     type Value = Arc<RwLock<BetState>>;
 }
 
-pub struct TeamState {
-    pub bets: HashMap<UserId, i64>,
-    pub bias: f64,
-    pub name: String
-}
-
-type Teams = [TeamState; 2];
+type TeamNames = [String; 2];
 
 pub struct BetState {
     pub ender: Option<Sender<bool>>,
     pub stopper: Option<Sender<()>>,
     pub msg: (MessageId, ChannelId),
-    pub teams: Teams
+    pub teams: TeamNames
 }
 
-fn calc_payout(teams: &Teams, swap: bool) -> f64 {
-    let mut teams = teams.each_ref();
-    if swap { teams.reverse(); }
-    let bias = 0.0;
-    //let bias = teams[0].bias;
-    let bets = teams[0].bets.len() as f64;
-    let other_bets = teams[1].bets.len() as f64;
-    let mut payout = 1.0 + (1.0 + bias) * other_bets / bets;
-    if !payout.is_normal() || other_bets == 0.0 {
-        payout = 2.0;
-    }
+async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2], [i32; 2])> {
+    let query = sqlx::query!(
+        r#"
+            SELECT
+                SUM(CASE WHEN target = 0 THEN 1 ELSE 0 END) as "red!: i32",
+                SUM(CASE WHEN target = 1 THEN 1 ELSE 0 END) as "blu!: i32"
+            FROM bets_events
+            WHERE bet = $1
+        "#,
+        bet_id
+    ).fetch_one(db).await?;
 
-    payout
+    let red = query.red as f64;
+    let blu = query.blu as f64;
+
+    let mut red_mult = blu / red;
+    if !red_mult.is_normal() { red_mult = 0.0; }
+    let mut blu_mult = red / blu;
+    if !blu_mult.is_normal() { blu_mult = 0.0; }
+    Ok((
+        [
+            1.0 + red_mult,
+            1.0 + blu_mult,
+        ],
+        [query.red, query.blu]
+    ))
 }
 
-fn create_fields(teams: &Teams) -> [(&String, String, bool); 2] {
-    let mut swap = false;
-    teams.each_ref().map(|team| {
-        let bias = team.bias;
-        let bets = team.bets.len();
-        let payout = calc_payout(teams, swap);
-        swap = true;
-        //(&team.name, format!("Bias: {:.2}%\nBets: {}\nPayout: x{:.2}", bias * 100.0, bets, payout), true)
-        (&team.name, format!("Bets: {}\nPayout: x{:.2}", bets, payout), true)
-    })
-}
+async fn build_embed(db: &Pool<Sqlite>, bet_id: i64, team_names: &TeamNames) -> anyhow::Result<CreateEmbed> {
+    let (payout, bets) = calc_payout(db, bet_id).await?;
 
-fn build_embed(teams: &Teams) -> CreateEmbed {
     let mut embd = CreateEmbed::default();
-    embd.title(format!("Team {} vs Team {}", teams[0].name, teams[1].name))
+    embd.title(format!("Team {} vs Team {}", team_names[0], team_names[1]))
         .description("Predict and bet on the match outcome")
-        .fields(create_fields(teams));
-    embd
+        .fields([
+            (&team_names[0], format!("Bets: {}\nPayout: x{:.2}", bets[0], payout[0]), true),
+            (&team_names[1], format!("Bets: {}\nPayout: x{:.2}", bets[1], payout[1]), true)
+        ]);
+    Ok(embd)
 }
 
-pub fn build_components(teams: &Teams) -> CreateComponents {
+pub fn build_components(team_names: &TeamNames) -> CreateComponents {
     let mut comp = CreateComponents::default();
     comp.create_action_row(|roww| {
         roww.create_button(|butn| {
                 butn.custom_id("betone")
-                    .label(format!("Bet for Team {}", teams[0].name))
+                    .label(format!("Bet for Team {}", team_names[0]))
             })
             .create_button(|butn| {
                 butn.custom_id("bettwo")
-                    .label(format!("Bet for Team {}", teams[1].name))
+                    .label(format!("Bet for Team {}", team_names[1]))
             })
     });
     comp
 }
 
 
-async fn finalise_bet(ctx: &Context, mutex: Arc<RwLock<BetState>>, int: Arc<ModalSubmitInteraction>, initial_id: &str) -> anyhow::Result<()> {
+async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_id: &str) -> anyhow::Result<()> {
     let amnt = &int.data.components[0].components[0];
+    let data = ctx.data.read().await;
+    let db = data.get::<Database>().unwrap();
+    let state_mutex = data.get::<CtxState>().unwrap();
 
     if let ActionRowComponent::InputText(e) = amnt {
         if let Ok(amnt) = e.value.parse::<u32>() {
-            let mut state = mutex.write().await;
-            let target = match initial_id {
-                "betone" => &mut state.teams[0],
-                "bettwo" => &mut state.teams[1],
-                _ => panic!("invalid button selected while betting")
-            };
-            let success = db_setbet(ctx, int.user.id, amnt).await?;
+            let state = state_mutex.read().await;
+            let success = db_setbet(db, int.message.as_ref().unwrap().id, int.user.id, amnt, initial_id == "bettwo").await?;
             if !success {
                 int.create_interaction_response(&ctx.http, |resp| {
                     resp.kind(InteractionResponseType::ChannelMessageWithSource)
                         .interaction_response_data(|data| {
-                            data.content(format!("You don't have enough coins to bet this much"))
+                            data.content(format!("You don't have enough koins to bet this much"))
                                 .ephemeral(true)
                         })
                 }).await?;
                 return Ok(());
             }
-            target.bets.insert(int.user.id, amnt.into());
 
             int.create_interaction_response(&ctx.http, |resp| {
                 resp.kind(InteractionResponseType::ChannelMessageWithSource)
@@ -127,7 +123,7 @@ async fn finalise_bet(ctx: &Context, mutex: Arc<RwLock<BetState>>, int: Arc<Moda
                     })
             }).await?;
 
-            let embed = build_embed(&state.teams);
+            let embed = build_embed(db, state.msg.0.into(), &state.teams).await?;
             state.msg.1.edit_message(&ctx.http, state.msg.0, |d| d.set_embed(embed)).await?;
         } else {
             int.create_interaction_response(&ctx.http, |resp| {
@@ -143,57 +139,35 @@ async fn finalise_bet(ctx: &Context, mutex: Arc<RwLock<BetState>>, int: Arc<Moda
     Ok(())
 }
 
-async fn prompt_bet(ctx: &Context, mutex: Arc<RwLock<BetState>>, int: Arc<MessageComponentInteraction>, msg: &Message) -> anyhow::Result<()> {
-    let state = mutex.read().await;
-    if state.teams.iter().any(|team| team.bets.contains_key(&int.user.id)) {
+async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: MessageId) -> anyhow::Result<()> {
+    let data = ctx.data.read().await;
+    let db = data.get::<Database>().unwrap();
+
+    let discord_id: i64 = int.user.id.into();
+    let msg_id: i64 = msg.into();
+    let check = sqlx::query!(
+        r#"
+            SELECT discord_id
+            FROM bets_events
+            WHERE bet = $1
+            AND discord_id = $2
+            LIMIT 1
+        "#,
+        msg_id,
+        discord_id
+    ).fetch_optional(db).await?.is_some();
+
+    if check {
         int.create_interaction_response(&ctx.http, |resp| {
             resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                .interaction_response_data(|data| {
-                    data.content("You've already set a bet!")
+                .interaction_response_data(|resd| {
+                    resd.content("You've already set a bet!")
                         .ephemeral(true)
                 })
         }).await?;
         return Ok(());
     }
-    drop(state);
 
-    let cid = format!("betamnt{}", int.id);
-    let clone = cid.clone();
-    int.create_interaction_response(&ctx, |resp| {
-        resp.kind(InteractionResponseType::Modal)
-            .interaction_response_data(|data| {
-                data.custom_id(clone)
-                    .title("Set your bet amount")
-                    .components(|c| c.create_action_row(|roww| {
-                        roww.create_input_text(|text| {
-                            text.custom_id("betinput")
-                                .label("Bet amount")
-                                .placeholder("e.g. 100 or 727")
-                                .style(InputTextStyle::Short)
-                        })
-                    }))
-            })
-    }).await?;
-
-    let modal_int = msg.await_modal_interaction(&ctx.shard)
-        .timeout(Duration::from_secs(60))
-        .author_id(int.user.id)
-        .filter(move |c| c.data.custom_id == cid)
-        .await;
-
-    if let Some(modal_int) = modal_int {
-        let id = int.data.custom_id.as_str();
-        finalise_bet(ctx, mutex, modal_int, id).await?;
-    }
-
-    Ok(())
-}
-
-// TODO: these sql statements are very very inefficient
-async fn db_setbet(ctx: &Context, user: UserId, amnt: u32) -> anyhow::Result<bool> {
-    let data = ctx.data.read().await;
-    let db = data.get::<Database>().unwrap();
-    let discord_id = *user.as_u64() as i64;
     sqlx::query!(
         "
             INSERT OR IGNORE INTO currency (discord_id, coins)
@@ -202,6 +176,52 @@ async fn db_setbet(ctx: &Context, user: UserId, amnt: u32) -> anyhow::Result<boo
         discord_id,
         1000
     ).execute(db).await?;
+    let coins = sqlx::query!(
+        "
+            SELECT coins
+            FROM currency
+            WHERE discord_id = $1
+            LIMIT 1
+        ",
+        discord_id
+    ).fetch_one(db).await?;
+    drop(data);
+
+    let cid = format!("betamnt{}", int.id);
+    let clone = cid.clone();
+    int.create_interaction_response(ctx, |resp| {
+        resp.kind(InteractionResponseType::Modal)
+            .interaction_response_data(|data| {
+                data.custom_id(clone)
+                    .title("Set your bet amount")
+                    .components(|c| c.create_action_row(|roww| {
+                        roww.create_input_text(|text| {
+                            text.custom_id("betinput")
+                                .label("Bet amount")
+                                .placeholder(format!("You currently have {} koins", coins.coins))
+                                .style(InputTextStyle::Short)
+                        })
+                    }))
+            })
+    }).await?;
+
+    let modal_int = CollectModalInteraction::new(&ctx).message_id(msg)
+        .timeout(Duration::from_secs(60))
+        .author_id(int.user.id)
+        .filter(move |c| c.data.custom_id == cid)
+        .await;
+
+    if let Some(modal_int) = modal_int {
+        let id = int.data.custom_id.as_str();
+        finalise_bet(ctx, modal_int, id).await?;
+    }
+
+    Ok(())
+}
+
+async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, team: bool) -> anyhow::Result<bool> {
+    let msg_id = *msg.as_u64() as i64;
+    let discord_id = *user.as_u64() as i64;
 
     let res = sqlx::query!(
         "
@@ -216,6 +236,21 @@ async fn db_setbet(ctx: &Context, user: UserId, amnt: u32) -> anyhow::Result<boo
     if res.coins < amnt.into() {
         return Ok(false)
     }
+
+    let datetime = chrono::offset::Utc::now();
+    sqlx::query!(
+        "
+            INSERT INTO bets_events
+                (discord_id, target, time, bet_placed, bet)
+            VALUES
+                ($1, $2, $3, $4, $5)
+        ",
+        discord_id,
+        team,
+        datetime,
+        amnt,
+        msg_id
+    ).execute(db).await?;
 
     sqlx::query!(
         "
@@ -234,66 +269,50 @@ async fn send_user(ctx: &Context, user: UserId, embed: CreateEmbed) -> Result<Me
     user.create_dm_channel(ctx).await?.send_message(ctx, |c| c.set_embed(embed)).await
 }
 
-async fn db_payout(ctx: &Context, msg: &String, teams: &Teams, winner: bool) -> anyhow::Result<()> {
-    let data = ctx.data.read().await;
-    let db = data.get::<Database>().unwrap();
-
-    let mut msgq = VecDeque::with_capacity(teams.iter().map(|t| t.bets.len()).reduce(|a, b| a + b).unwrap());
-    for (uid, bet) in &teams[winner as usize].bets {
-        let discord_id = *uid.as_u64() as i64;
-        let coins = ((*bet as f64) * calc_payout(teams, winner)) as i64;
-        sqlx::query!(
-            "
-                UPDATE currency
-                SET coins = coins + $1
-                WHERE discord_id = $2
-            ",
-            coins,
-            discord_id
-        )
-            .execute(db)
-            .await?;
-
+async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool) -> anyhow::Result<()> {
+    let msg_id: i64 = msg.id.into();
+    let (payout, _) = calc_payout(db, msg_id).await?;
+    let payout = payout[winner as usize];
+    let events = sqlx::query!(
+        r#"
+            SELECT discord_id, target, bet_placed
+            FROM bets_events
+            WHERE bet = $1
+        "#,
+        msg_id
+    ).fetch_all(db).await?;
+    let mut msgq = vec![];
+    for row in events {
         let mut embd = CreateEmbed::default();
-        embd.title("You got mail!")
-            .colour(Colour::from_rgb(0, 255, 0))
-            .description(format!("You won {} from [this bet]({})", coins, msg));
+        embd.title("You got mail!");
+        if row.target == winner {
+            let coins = row.bet_placed as f64 * payout;
+            sqlx::query!(
+                "
+                    UPDATE currency
+                    SET coins = coins + $1
+                    WHERE discord_id = $2
+                ",
+                coins,
+                row.discord_id
+            )
+                .execute(db)
+                .await?;
+            embd
+                .colour(Colour::from_rgb(0, 255, 0))
+                .description(format!("You won {} koins from [this bet]({})", coins, msg.link()));
+        } else {
+            embd
+                .colour(Colour::from_rgb(255, 0, 0))
+                .description(format!("You lost {} koins from [this bet]({})", row.bet_placed, msg.link()));
+        }
 
-        let msg = send_user(ctx, uid.clone(), embd);
-        msgq.push_back(msg);
-    }
-
-    for (uid, bet) in &teams[!winner as usize].bets {
-        let mut embd = CreateEmbed::default();
-        embd.title("You got mail!")
-            .colour(Colour::from_rgb(255, 0, 0))
-            .description(format!("You lost {} from [this bet]({})", bet, msg));
-
-        let msg = send_user(ctx, uid.clone(), embd);
-        msgq.push_back(msg);
+        let msg = send_user(ctx, UserId(row.discord_id as u64), embd);
+        msgq.push(msg);
     }
 
     for f in msgq {
         f.await?;
-    }
-
-    Ok(())
-}
-
-async fn update_matches(osu: Arc<Osu>, match_id: u32, state: Arc<RwLock<BetState>>) -> anyhow::Result<()> {
-    let mut int = interval(Duration::from_secs(10));
-    int.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-    let mut osu_match = osu.osu_match(match_id).await?;
-    loop {
-        int.tick().await;
-        osu_match = osu_match.get_next(&osu).await?;
-        if osu_match.drain_games().next() != None {
-            if let Some(sender) = state.write().await.stopper.take() {
-                sender.send(()).unwrap();
-            }
-            break
-        }
     }
 
     Ok(())
@@ -309,54 +328,76 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         return Ok(());
     }
 
-    let bias = int.data.options.get(0)
-        .and_then(|o| o.value.as_ref())
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5);
+    let teams = ["red_name", "blue_name"].map(|i| {
+        int.data.options
+            .iter()
+            .find(|o| o.name == i)
+            .and_then(|o| o.value.as_ref())
+            .and_then(|v| v.as_str())
+            .unwrap()
+            .to_string()
+    });
 
+    // /* Init state
     let state = BetState {
         ender: None,
         stopper: None,
         msg: (MessageId(0), ChannelId(0)),
-        teams: [
-            TeamState { bets: HashMap::new(), bias, name: "Red".to_string() },
-            TeamState { bets: HashMap::new(), bias: 1.0 - bias, name: "Blue".to_string() }
-        ]
+        teams
     };
     let mutex = Arc::new(RwLock::new(state));
     ctx.data.write().await.insert::<CtxState>(Arc::clone(&mutex));
+    //    Init state */
 
+    // /* Send messages
     let state = mutex.read().await;
+    // Bet message
     let msg = int.channel_id.send_message(&ctx.http, move |rmsg| {
-        rmsg.set_embed(build_embed(&state.teams))
+        rmsg.add_embed(|embd|
+                embd.title(format!("Team {} vs Team {}", &state.teams[0], &state.teams[1]))
+                    .description("Predict and bet on the match outcome")
+            )
             .set_components(build_components(&state.teams))
     }).await?;
     mutex.write().await.msg = (msg.id, msg.channel_id);
-
     let mut interaction_stream = msg.await_component_interactions(&ctx).build();
+
+    // Int message
     int.create_interaction_response(&ctx.http, |resp| {
         resp.kind(InteractionResponseType::ChannelMessageWithSource)
             .interaction_response_data(|m| m.ephemeral(true).content("sentt"))
     }).await?;
+    //    Send messages */
 
-    let mut state = mutex.write().await;
-    let (sender, mut stop_receiver) = oneshot::channel::<()>();
-    state.stopper = Some(sender);
-    let (sender, mut end_receiver) = oneshot::channel::<bool>();
-    state.ender = Some(sender);
-    drop(state);
-
-    let mut match_handle = None;
-    if let Some(match_id) = int.data.options.get(0)
-        .and_then(|o| o.value.as_ref())
-        .and_then(|v| v.as_u64())
-        .and_then(|v| u32::try_from(v).ok()) {
+    // /* Create db bet
+    {
         let data = ctx.data.read().await;
-        let osu = data.get::<OsuData>().unwrap();
-        let c_osu = Arc::clone(osu);
-        let c_mutex = Arc::clone(&mutex);
-        match_handle = Some(tokio::spawn(async move { update_matches(c_osu, match_id, c_mutex).await }));
+        let db = data.get::<Database>().unwrap();
+        let msg_id: i64 = msg.id.into();
+        let datetime = chrono::offset::Utc::now();
+        sqlx::query!(
+            r#"
+                INSERT INTO bets (msg_id, start_time)
+                VALUES ($1, $2)
+            "#,
+            msg_id,
+            datetime
+        ).execute(db).await?;
+
+        let state = mutex.read().await;
+        let embed = build_embed(db, msg_id, &state.teams).await?;
+        state.msg.1.edit_message(&ctx.http, msg.id, |d| d.set_embed(embed)).await?;
     }
+    //    Create db bet */
+
+    // /* Init oneshots
+    let mut state = mutex.write().await;
+    let (stop_sender, mut stop_receiver) = oneshot::channel::<()>();
+    let (end_sender, mut end_receiver) = oneshot::channel::<bool>();
+    state.stopper = Some(stop_sender);
+    state.ender = Some(end_sender);
+    drop(state);
+    //    Init oneshots */
 
     let mut end_res = None;
     let mut handles = vec![];
@@ -366,19 +407,22 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         e = &mut end_receiver => { end_res = Some(e.unwrap()); None },
     } {
         let ctx = ctx.clone();
-        let mutex = Arc::clone(&mutex);
         let msg = msg.clone();
 
         let iid = interaction.id.as_u64();
-        let span = info_span!("func", iid);
+        let uid = interaction.user.id.as_u64();
+        let span = info_span!("prompt_bet", iid, uid);
         let handle = tokio::spawn(async move {
-            prompt_bet(&ctx, mutex, interaction, &msg).await.unwrap()
+            prompt_bet(&ctx, interaction, msg.id).await.unwrap()
         }.instrument(span));
         handles.push(handle);
     }
 
+    // Clear components (after stop/end received)
     msg.channel_id.edit_message(&ctx, msg.id, |m| m.set_components(CreateComponents::default())).await?;
 
+    // If not ended, wait til ended
+    // TODO: could be done better(?)
     if end_res.is_none() {
         let ret = end_receiver.try_recv();
         let ret = match ret {
@@ -398,12 +442,28 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         }
     }
 
-    if let Some(handle) = match_handle.take() { handle.abort(); }
-    let state = mutex.read().await;
-    db_payout(ctx, &msg.link(), &state.teams, end_res.unwrap()).await?;
-    drop(state);
-    ctx.data.write().await.remove::<CtxState>();
+    let end_res = end_res.unwrap();
 
+    let datetime = chrono::offset::Utc::now();
+    let mut data = ctx.data.write().await;
+    let db = data.get::<Database>().unwrap();
+    let mid: i64 = msg.id.into();
+
+    sqlx::query!(
+        r#"
+            UPDATE bets
+            SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,
+                end_time = $1,
+                blue_win = $2
+            WHERE msg_id = $3
+        "#,
+        datetime,
+        end_res,
+        mid
+    ).execute(db).await?;
+
+    db_payout(ctx, db, &msg, end_res).await?;
+    data.remove::<CtxState>();
     Ok(())
 }
 
@@ -412,17 +472,15 @@ pub fn register(cmnd: &mut CreateApplicationCommand) -> &mut CreateApplicationCo
         .description("bet deez nuts")
         .default_member_permissions(Permissions::MANAGE_GUILD)
         .create_option(|optn| {
-            optn.name("match_id")
-                .description("Multiplayer match ID")
-                .kind(CommandOptionType::Integer)
-                .min_int_value(1)
-                .required(false)
+            optn.name("red_name")
+                .description("Red team name")
+                .kind(CommandOptionType::String)
+                .required(true)
         })
         .create_option(|optn| {
-            optn.name("bias")
-                .description("bias for first team (default = 0.5 = fair/no bias)")
-                .kind(CommandOptionType::Number)
-                .min_number_value(0.0)
-                .max_number_value(1.0)
+            optn.name("blue_name")
+                .description("Blue team name")
+                .kind(CommandOptionType::String)
+                .required(true)
         })
 }

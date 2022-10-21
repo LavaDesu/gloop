@@ -5,6 +5,7 @@ use serenity::model::prelude::command::CommandType;
 use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 
+use crate::Database;
 use crate::commands::bet::CtxState;
 
 pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
@@ -15,6 +16,18 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         if matches!(int.data.target_id, Some(id) if id.as_u64() == state.msg.0.as_u64()) {
             if let Some(stopper) = state.stopper.take() {
                 stopper.send(()).unwrap();
+                let db = data.get::<Database>().unwrap();
+                let mid: i64 = state.msg.0.into();
+                let datetime = chrono::offset::Utc::now();
+                sqlx::query!(
+                    r#"
+                        UPDATE bets
+                        SET stop_time = $1
+                        WHERE msg_id = $2
+                    "#,
+                    datetime,
+                    mid
+                ).execute(db).await?;
                 int.create_interaction_response(&ctx.http, |data| {
                     data.kind(InteractionResponseType::ChannelMessageWithSource)
                         .interaction_response_data(|m| m.ephemeral(true).content("Bets stopped!"))

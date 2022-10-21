@@ -1,11 +1,10 @@
 #![feature(array_methods)]
+#![feature(iter_intersperse)]
 
 mod commands;
 #[macro_use] mod macros;
-use std::sync::Arc;
-use std::{env, path::{PathBuf, Path}};
+use std::{env, path::PathBuf};
 
-use rosu_v2::Osu;
 use serenity::async_trait;
 use serenity::model::application::interaction::Interaction;
 use serenity::model::{id::GuildId, gateway::Ready};
@@ -13,16 +12,13 @@ use serenity::prelude::*;
 use sqlx::{sqlite::SqlitePoolOptions, Sqlite, Pool, migrate::Migrator};
 use tokio::try_join;
 use tracing::{error, info, warn, trace};
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 struct Database;
-struct OsuData;
 
 impl TypeMapKey for Database {
     type Value = Pool<Sqlite>;
-}
-impl TypeMapKey for OsuData {
-    type Value = Arc<Osu>;
 }
 
 struct Handler;
@@ -38,12 +34,13 @@ impl EventHandler for Handler {
                 bet_admin_stopper["Stop accepting bets"],
                 bet_admin_ender["End and finalise bets"],
                 buttontest,
-                profile["coins"],
+                leaderboards,
+                profile["koins"],
             ]);
 
             if let Err(why) = run
             {
-                warn!("Cannot respond to slash command: {}", why.backtrace());
+                warn!("Cannot respond to slash command: {} {}", why, why.backtrace());
             }
         }
     }
@@ -64,6 +61,7 @@ impl EventHandler for Handler {
             bet_admin_stopper,
             bet_admin_ender,
             buttontest,
+            leaderboards,
             profile,
         ]))
         .await;
@@ -74,9 +72,11 @@ impl EventHandler for Handler {
 
 fn setup_tracing() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(fmt::layer().compact())
+        .with(fmt::layer()
+              .compact()
+              .with_span_events(FmtSpan::CLOSE | FmtSpan::NEW))
         .with(EnvFilter::builder()
-              .parse("warn,gloop=info")?
+              .parse("warn,gloop=info,sqlx=trace")?
               //.parse("info")?
         )
         .init();
@@ -94,7 +94,7 @@ async fn setup_db(url: String) -> anyhow::Result<Pool<Sqlite>> {
     #[cfg(debug_assertions)]
     {
         let crate_dir = env::var("CARGO_MANIFEST_DIR")?;
-        migration_path = Path::new(&crate_dir).join("./migrations");
+        migration_path = std::path::Path::new(&crate_dir).join("./migrations");
     }
     #[cfg(not(debug_assertions))]
     {
@@ -106,20 +106,14 @@ async fn setup_db(url: String) -> anyhow::Result<Pool<Sqlite>> {
     Ok(pool)
 }
 
-async fn setup_osu(id: u64, secret: String) -> anyhow::Result<Osu> {
-    Ok(Osu::new(id, secret).await?)
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     setup_tracing()?;
 
     let token = env::var("BLOB_TOKEN").expect("Missing BLOB_TOKEN");
     let db_url = env::var("DATABASE_URL").expect("Missing DATABASE_URL");
-    let osu_id = env::var("BLOB_ID").ok().and_then(|i| i.parse::<u64>().ok()).expect("Missing or invalid BLOB_ID");
-    let osu_secret = env::var("BLOB_SECRET").expect("Missing BLOB_SECRET");
 
-    let (db, osu) = try_join!(setup_db(db_url), setup_osu(osu_id, osu_secret))?;
+    let (db,) = try_join!(setup_db(db_url))?;
 
     let mut client = Client::builder(token, GatewayIntents::empty())
         .event_handler(Handler)
@@ -129,7 +123,6 @@ async fn main() -> anyhow::Result<()> {
     {
         let mut data = client.data.write().await;
         data.insert::<Database>(db);
-        data.insert::<OsuData>(Arc::new(osu));
     }
 
     if let Err(why) = client.start().await {
