@@ -356,7 +356,6 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                 embd.title(format!("Team {} vs Team {}", &state.teams[0], &state.teams[1]))
                     .description("Predict and bet on the match outcome")
             )
-            .set_components(build_components(&state.teams))
     }).await?;
     mutex.write().await.msg = (msg.id, msg.channel_id);
     let mut interaction_stream = msg.await_component_interactions(ctx).build();
@@ -385,7 +384,10 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
 
         let state = mutex.read().await;
         let embed = build_embed(db, msg_id, &state.teams).await?;
-        state.msg.1.edit_message(&ctx.http, msg.id, |d| d.set_embed(embed)).await?;
+        state.msg.1.edit_message(&ctx.http, msg.id, |nmsg| {
+            nmsg.set_components(build_components(&state.teams))
+                .set_embed(embed)
+        }).await?;
     }
     //    Create db bet */
 
