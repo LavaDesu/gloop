@@ -76,7 +76,7 @@ fn setup_tracing() -> anyhow::Result<()> {
               .compact()
               .with_span_events(FmtSpan::CLOSE | FmtSpan::NEW))
         .with(EnvFilter::builder()
-              .parse("warn,gloop=info,sqlx=trace")?
+              .parse("warn,gloop=info")?
               //.parse("info")?
         )
         .init();
