@@ -26,7 +26,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .interaction_response_data(|m| m.ephemeral(true).content("sentt"))
     }).await?;
 
-    let mut interaction_stream = msg.await_component_interactions(&ctx).timeout(Duration::from_secs(5)).build();
+    let mut interaction_stream = msg.await_component_interactions(ctx).timeout(Duration::from_secs(5)).build();
 
     while let Some(interaction) = interaction_stream.next().await {
         let button = match interaction.data.custom_id.as_str() {

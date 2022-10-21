@@ -108,7 +108,7 @@ async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_i
                 int.create_interaction_response(&ctx.http, |resp| {
                     resp.kind(InteractionResponseType::ChannelMessageWithSource)
                         .interaction_response_data(|data| {
-                            data.content(format!("You don't have enough koins to bet this much"))
+                            data.content("You don't have enough koins to bet this much")
                                 .ephemeral(true)
                         })
                 }).await?;
@@ -205,7 +205,7 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
             })
     }).await?;
 
-    let modal_int = CollectModalInteraction::new(&ctx).message_id(msg)
+    let modal_int = CollectModalInteraction::new(ctx).message_id(msg)
         .timeout(Duration::from_secs(60))
         .author_id(int.user.id)
         .filter(move |c| c.data.custom_id == cid)
@@ -220,8 +220,8 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
 }
 
 async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, team: bool) -> anyhow::Result<bool> {
-    let msg_id = *msg.as_u64() as i64;
-    let discord_id = *user.as_u64() as i64;
+    let msg_id: i64 = msg.into();
+    let discord_id: i64 = user.into();
 
     let res = sqlx::query!(
         "
@@ -272,7 +272,7 @@ async fn send_user(ctx: &Context, user: UserId, embed: CreateEmbed) -> Result<Me
 async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool) -> anyhow::Result<()> {
     let msg_id: i64 = msg.id.into();
     let (payout, _) = calc_payout(db, msg_id).await?;
-    let payout = payout[winner as usize];
+    let payout = payout[usize::from(winner)];
     let events = sqlx::query!(
         r#"
             SELECT discord_id, target, bet_placed
@@ -360,7 +360,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .set_components(build_components(&state.teams))
     }).await?;
     mutex.write().await.msg = (msg.id, msg.channel_id);
-    let mut interaction_stream = msg.await_component_interactions(&ctx).build();
+    let mut interaction_stream = msg.await_component_interactions(ctx).build();
 
     // Int message
     int.create_interaction_response(&ctx.http, |resp| {
@@ -413,7 +413,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         let uid = interaction.user.id.as_u64();
         let span = info_span!("prompt_bet", iid, uid);
         let handle = tokio::spawn(async move {
-            prompt_bet(&ctx, interaction, msg.id).await.unwrap()
+            prompt_bet(&ctx, interaction, msg.id).await.unwrap();
         }.instrument(span));
         handles.push(handle);
     }
