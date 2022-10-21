@@ -16,7 +16,6 @@ use serenity::model::prelude::interaction::modal::ModalSubmitInteraction;
 use serenity::prelude::*;
 use serenity::utils::Colour;
 use sqlx::{Pool, Sqlite};
-use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::oneshot::{self, Sender};
 use tracing::{info_span, Instrument};
 
@@ -422,31 +421,17 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     msg.channel_id.edit_message(&ctx, msg.id, |m| m.set_components(CreateComponents::default())).await?;
 
     // If not ended, wait til ended
-    // TODO: could be done better(?)
     if end_res.is_none() {
-        let ret = end_receiver.try_recv();
-        let ret = match ret {
-            Err(TryRecvError::Empty) => end_receiver.await?,
-            // XXX: BUG: TODO
-            Err(TryRecvError::Closed) => true,
-            Ok(e) => e
-        };
-        end_res = Some(ret);
-
-        for handle in handles {
-            handle.await?;
-        }
-    } else {
-        for handle in handles {
-            handle.abort();
-        }
+        end_res = Some(end_receiver.await?);
+    }
+    for handle in handles {
+        handle.abort();
     }
 
-    let end_res = end_res.unwrap();
-
-    let datetime = chrono::offset::Utc::now();
     let mut data = ctx.data.write().await;
     let db = data.get::<Database>().unwrap();
+    let datetime = chrono::offset::Utc::now();
+    let end_res = end_res.unwrap();
     let mid: i64 = msg.id.into();
 
     sqlx::query!(
