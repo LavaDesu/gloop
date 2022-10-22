@@ -36,20 +36,31 @@ pub struct BetState {
     pub teams: TeamNames
 }
 
-async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2], [i32; 2])> {
+async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2], [i64; 2], [i64; 2])> {
     let query = sqlx::query!(
         r#"
-            SELECT
-                SUM(CASE WHEN target = 0 THEN 1 ELSE 0 END) as "red!: i32",
-                SUM(CASE WHEN target = 1 THEN 1 ELSE 0 END) as "blu!: i32"
+            SELECT target, bet_placed
             FROM bets_events
             WHERE bet = $1
         "#,
         bet_id
-    ).fetch_one(db).await?;
+    ).fetch_all(db).await?;
 
-    let red = query.red as f64;
-    let blu = query.blu as f64;
+    let mut totals = [0, 0];
+    let mut bets = [0, 0];
+
+    for row in query {
+        if row.target {
+            totals[1] += row.bet_placed;
+            bets[1] += 1;
+        } else {
+            totals[0] += row.bet_placed;
+            bets[0] += 1;
+        }
+    }
+
+    let red = totals[0] as f64;
+    let blu = totals[1] as f64;
 
     let mut red_mult = blu / red;
     if !red_mult.is_normal() { red_mult = 0.0; }
@@ -60,19 +71,20 @@ async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2]
             1.0 + red_mult,
             1.0 + blu_mult,
         ],
-        [query.red, query.blu]
+        totals,
+        bets
     ))
 }
 
 async fn build_embed(db: &Pool<Sqlite>, bet_id: i64, team_names: &TeamNames) -> anyhow::Result<CreateEmbed> {
-    let (payout, bets) = calc_payout(db, bet_id).await?;
+    let (payout, totals, bets) = calc_payout(db, bet_id).await?;
 
     let mut embd = CreateEmbed::default();
     embd.title(format!("Team {} vs Team {}", team_names[0], team_names[1]))
         .description("Predict and bet on the match outcome")
         .fields([
-            (&team_names[0], format!("Bets: {}\nPayout: x{:.2}", bets[0], payout[0]), true),
-            (&team_names[1], format!("Bets: {}\nPayout: x{:.2}", bets[1], payout[1]), true)
+            (&team_names[0], format!("Bets: {}\nPool: {} koins\nPayout: x{:.2}", bets[0], totals[0], payout[0]), true),
+            (&team_names[1], format!("Bets: {}\nPool: {} koins\nPayout: x{:.2}", bets[1], totals[1], payout[1]), true)
         ]);
     Ok(embd)
 }
@@ -91,7 +103,6 @@ pub fn build_components(team_names: &TeamNames) -> CreateComponents {
     });
     comp
 }
-
 
 async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_id: &str) -> anyhow::Result<()> {
     let amnt = &int.data.components[0].components[0];
@@ -270,7 +281,7 @@ async fn send_user(ctx: &Context, user: UserId, embed: CreateEmbed) -> Result<Me
 
 async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool) -> anyhow::Result<()> {
     let msg_id: i64 = msg.id.into();
-    let (payout, _) = calc_payout(db, msg_id).await?;
+    let payout = calc_payout(db, msg_id).await?.0;
     let payout = payout[usize::from(winner)];
     let events = sqlx::query!(
         r#"
