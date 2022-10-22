@@ -119,34 +119,16 @@ async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_i
             let state = state_mutex.read().await;
             let success = db_setbet(db, int.message.as_ref().unwrap().id, int.user.id, amnt, initial_id == "bettwo").await?;
             if !success {
-                int.create_interaction_response(&ctx.http, |resp| {
-                    resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|data| {
-                            data.content("You don't have enough koins to bet this much")
-                                .ephemeral(true)
-                        })
-                }).await?;
+                intr_emsg!(int, ctx, "You don't have enough koins to bet this much").await?;
                 return Ok(());
             }
 
-            int.create_interaction_response(&ctx.http, |resp| {
-                resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|data| {
-                        data.content(format!("You've bet {}. Note that payout may change as more people start putting bets.", amnt))
-                            .ephemeral(true)
-                    })
-            }).await?;
+            intr_emsg!(int, ctx, format!("You've bet {}. Note that payout may change as more people start putting bets.", amnt)).await?;
 
             let embed = build_embed(db, state.msg.0.into(), &state.teams).await?;
             state.msg.1.edit_message(&ctx.http, state.msg.0, |d| d.set_embed(embed)).await?;
         } else {
-            int.create_interaction_response(&ctx.http, |resp| {
-                resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|data| {
-                        data.content("Failed to parse bet amount (are you sure it's a valid, positive, no-decimal number?)")
-                            .ephemeral(true)
-                    })
-            }).await?;
+            intr_emsg!(int, ctx, "Failed to parse bet amount (are you sure it's a valid, positive, no-decimal number?)").await?;
         }
     }
 
@@ -172,13 +154,7 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
     ).fetch_optional(db).await?.is_some();
 
     if check {
-        int.create_interaction_response(&ctx.http, |resp| {
-            resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                .interaction_response_data(|resd| {
-                    resd.content("You've already set a bet!")
-                        .ephemeral(true)
-                })
-        }).await?;
+        intr_emsg!(int, ctx, "You've already set a bet!").await?;
         return Ok(());
     }
 
@@ -334,10 +310,7 @@ async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool
 
 pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
     if ctx.data.read().await.contains_key::<CtxState>() {
-        int.create_interaction_response(&ctx.http, |resp| {
-            resp.kind(InteractionResponseType::ChannelMessageWithSource)
-                .interaction_response_data(|m| m.ephemeral(true).content("There's already a bet running at (msg placeholder)"))
-        }).await?;
+        intr_emsg!(int, ctx, "There's already a bet running at (msg placeholder)").await?;
 
         return Ok(());
     }
@@ -374,12 +347,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     }).await?;
     mutex.write().await.msg = (msg.id, msg.channel_id);
     let mut interaction_stream = msg.await_component_interactions(ctx).build();
-
-    // Int message
-    int.create_interaction_response(&ctx.http, |resp| {
-        resp.kind(InteractionResponseType::ChannelMessageWithSource)
-            .interaction_response_data(|m| m.ephemeral(true).content("sentt"))
-    }).await?;
+    intr_emsg!(int, ctx, "sentt").await?;
     //    Send messages */
 
     // /* Create db bet

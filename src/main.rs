@@ -1,8 +1,8 @@
 #![feature(array_methods)]
 #![feature(iter_intersperse)]
 
-mod commands;
 #[macro_use] mod macros;
+mod commands;
 use std::{env, path::PathBuf};
 
 use serenity::async_trait;

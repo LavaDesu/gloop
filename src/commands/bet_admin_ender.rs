@@ -56,29 +56,18 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                     let mut state = state.write().await;
                     if let Some(ender) = state.ender.take() {
                         ender.send(win).unwrap();
-                        nint.create_interaction_response(&ctx.http, |data| {
-                            data.kind(InteractionResponseType::ChannelMessageWithSource)
-                                .interaction_response_data(|m| m.ephemeral(true).content("Bets ended!"))
-                        }).await?;
+                        intr_emsg!(nint, ctx, "Bets ended!").await?;
                         return Ok(());
                     }
                 }
 
-                nint.create_interaction_response(&ctx.http, |data| {
-                    data.kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|m| m.ephemeral(true).content("Invalid team input or bet ended during input"))
-                }).await?;
-
+                intr_emsg!(nint, ctx, "Invalid team input or bet ended during input").await?;
                 return Ok(());
             }
         }
     }
 
-    int.create_interaction_response(&ctx.http, |data| {
-        data.kind(InteractionResponseType::ChannelMessageWithSource)
-            .interaction_response_data(|m| m.ephemeral(true).content("This message isn't a current, running, unended bet"))
-    }).await?;
-
+    intr_emsg!(int, ctx, "This message isn't a current, running, unended bet").await?;
     Ok(())
 }
 

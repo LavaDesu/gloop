@@ -28,20 +28,13 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                     datetime,
                     mid
                 ).execute(db).await?;
-                int.create_interaction_response(&ctx.http, |data| {
-                    data.kind(InteractionResponseType::ChannelMessageWithSource)
-                        .interaction_response_data(|m| m.ephemeral(true).content("Bets stopped!"))
-                }).await?;
+                intr_emsg!(int, ctx, "Bets stopped!").await?;
                 return Ok(());
             }
         }
     }
 
-    int.create_interaction_response(&ctx.http, |data| {
-        data.kind(InteractionResponseType::ChannelMessageWithSource)
-            .interaction_response_data(|m| m.ephemeral(true).content("This message isn't a current, running, unstopped bet"))
-    }).await?;
-
+    intr_emsg!(int, ctx, "This message isn't a current, running, unstopped bet").await?;
     Ok(())
 }
 

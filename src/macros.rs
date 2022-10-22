@@ -20,3 +20,27 @@ macro_rules! cmdcreate {
         $builder$( .create_application_command(|cmd| $cmd::register(cmd)) )*
     };
 }
+
+#[macro_export]
+macro_rules! intr_msg {
+    ($int:ident, $http:ident, $cnt:expr) => {
+        intr_data!($int, $http, |d| d.content($cnt));
+    };
+}
+
+#[macro_export]
+macro_rules! intr_emsg {
+    ($int:ident, $http:ident, $cnt:expr) => {
+        intr_data!($int, $http, |d| d.content($cnt).ephemeral(true))
+    };
+}
+
+#[macro_export]
+macro_rules! intr_data {
+    ($int:ident, $http:ident, $($data:tt)*) => {
+        $int.create_interaction_response(&$http, |resp| {
+            resp.kind(InteractionResponseType::ChannelMessageWithSource)
+                .interaction_response_data($($data)*)
+        })
+    };
+}
