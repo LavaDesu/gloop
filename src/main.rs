@@ -33,7 +33,6 @@ impl EventHandler for Handler {
                 bet,
                 bet_admin_stopper["Stop accepting bets"],
                 bet_admin_ender["End and finalise bets"],
-                buttontest,
                 leaderboards,
                 profile["koins"],
             ]);
@@ -60,7 +59,6 @@ impl EventHandler for Handler {
             bet,
             bet_admin_stopper,
             bet_admin_ender,
-            buttontest,
             leaderboards,
             profile,
         ]))
