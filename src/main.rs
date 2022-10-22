@@ -47,12 +47,10 @@ impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
         info!("Hello from {}#{:04}", ready.user.name, ready.user.discriminator);
 
-        let guild_id = GuildId(
-            env::var("BLOB_DEV_GUILD")
-                .expect("Expected BLOB_DEV_GUILD in environment")
-                .parse()
-                .expect("BLOB_DEV_GUILD must be an integer"),
-        );
+        // [unwrap] unwrappable because we've already checked for it in main()
+        // only way this would fail is if we change this env in this program anywhere,
+        // which I don't think will ever be a thing
+        let guild_id = GuildId(env::var("BLOB_DEV_GUILD").unwrap().parse().unwrap());
 
         use commands::*;
         let gcmds = GuildId::set_application_commands(&guild_id, &ctx.http, |builder| cmdcreate!(builder, [
@@ -110,6 +108,8 @@ async fn main() -> anyhow::Result<()> {
 
     let token = env::var("BLOB_TOKEN").expect("Missing BLOB_TOKEN");
     let db_url = env::var("DATABASE_URL").expect("Missing DATABASE_URL");
+    env::var("BLOB_DEV_GUILD").expect("Missing BLOB_DEV_GUILD")
+        .parse::<u64>().expect("BLOB_DEV_GUILD must be a u64");
 
     let (db,) = try_join!(setup_db(db_url))?;
 
