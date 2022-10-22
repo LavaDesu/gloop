@@ -1,12 +1,12 @@
 use serenity::builder::CreateApplicationCommand;
 use serenity::client::Context;
-use serenity::model::Permissions;
 use serenity::model::prelude::command::CommandType;
-use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::interaction::InteractionResponseType;
+use serenity::model::Permissions;
 
-use crate::Database;
 use crate::commands::bet::CtxState;
+use crate::Database;
 
 pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
     let data = ctx.data.read().await;
@@ -27,7 +27,9 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                     "#,
                     datetime,
                     mid
-                ).execute(db).await?;
+                )
+                .execute(db)
+                .await?;
                 intr_emsg!(int, ctx, "Bets stopped!").await?;
                 return Ok(());
             }

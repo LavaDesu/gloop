@@ -1,19 +1,21 @@
 #![feature(array_methods)]
 #![feature(iter_intersperse)]
 
-#[macro_use] extern crate tracing;
-#[macro_use] mod macros;
+#[macro_use]
+extern crate tracing;
+#[macro_use]
+mod macros;
 
 mod commands;
 use std::{env, path::PathBuf};
 
 use serenity::async_trait;
 use serenity::model::application::interaction::Interaction;
-use serenity::model::{id::GuildId, gateway::Ready};
+use serenity::model::{gateway::Ready, id::GuildId};
 use serenity::prelude::*;
-use sqlx::{sqlite::SqlitePoolOptions, Sqlite, Pool, migrate::Migrator};
+use sqlx::{migrate::Migrator, sqlite::SqlitePoolOptions, Pool, Sqlite};
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 struct Database;
 
@@ -37,15 +39,22 @@ impl EventHandler for Handler {
                 profile["koins"],
             ]);
 
-            if let Err(why) = run
-            {
-                warn!("Slash command {} failed: {}\n{}", cmd.data.name, why, why.backtrace());
+            if let Err(why) = run {
+                warn!(
+                    "Slash command {} failed: {}\n{}",
+                    cmd.data.name,
+                    why,
+                    why.backtrace()
+                );
             }
         }
     }
 
     async fn ready(&self, ctx: Context, ready: Ready) {
-        info!("Hello from {}#{:04}", ready.user.name, ready.user.discriminator);
+        info!(
+            "Hello from {}#{:04}",
+            ready.user.name, ready.user.discriminator
+        );
 
         // [unwrap] unwrappable because we've already checked for it in main()
         // only way this would fail is if we change this env in this program anywhere,
@@ -53,13 +62,15 @@ impl EventHandler for Handler {
         let guild_id = GuildId(env::var("BLOB_DEV_GUILD").unwrap().parse().unwrap());
 
         use commands::*;
-        let gcmds = GuildId::set_application_commands(&guild_id, &ctx.http, |builder| cmdcreate!(builder, [
-            bet,
-            bet_admin_stopper,
-            bet_admin_ender,
-            leaderboards,
-            profile,
-        ]))
+        let gcmds = GuildId::set_application_commands(&guild_id, &ctx.http, |builder| {
+            cmdcreate!(builder, [
+                bet,
+                bet_admin_stopper,
+                bet_admin_ender,
+                leaderboards,
+                profile,
+            ])
+        })
         .await;
 
         trace!("Slash commands: {:#?}", gcmds);
@@ -68,12 +79,15 @@ impl EventHandler for Handler {
 
 fn setup_tracing() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(fmt::layer()
-              .compact()
-              .with_span_events(FmtSpan::CLOSE | FmtSpan::NEW))
-        .with(EnvFilter::builder()
-              .parse("warn,gloop=info")?
-              //.parse("info")?
+        .with(
+            fmt::layer()
+                .compact()
+                .with_span_events(FmtSpan::CLOSE | FmtSpan::NEW),
+        )
+        .with(
+            EnvFilter::builder()
+                .parse("warn,gloop=info")?
+                //.parse("info")?
         )
         .init();
 
@@ -83,7 +97,8 @@ fn setup_tracing() -> anyhow::Result<()> {
 async fn setup_db(url: String) -> anyhow::Result<Pool<Sqlite>> {
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect(&url).await?;
+        .connect(&url)
+        .await?;
 
     let migration_path: PathBuf;
 
@@ -108,8 +123,10 @@ async fn main() -> anyhow::Result<()> {
 
     let token = env::var("BLOB_TOKEN").expect("Missing BLOB_TOKEN");
     let db_url = env::var("DATABASE_URL").expect("Missing DATABASE_URL");
-    env::var("BLOB_DEV_GUILD").expect("Missing BLOB_DEV_GUILD")
-        .parse::<u64>().expect("BLOB_DEV_GUILD must be a u64");
+    env::var("BLOB_DEV_GUILD")
+        .expect("Missing BLOB_DEV_GUILD")
+        .parse::<u64>()
+        .expect("BLOB_DEV_GUILD must be a u64");
 
     let mut client = Client::builder(token, GatewayIntents::empty())
         .event_handler(Handler)

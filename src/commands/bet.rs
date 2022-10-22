@@ -1,18 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serenity::builder::{CreateEmbed, CreateApplicationCommand, CreateComponents};
+use serenity::builder::{CreateApplicationCommand, CreateComponents, CreateEmbed};
 use serenity::collector::CollectModalInteraction;
 use serenity::futures::StreamExt;
-use serenity::model::Permissions;
-use serenity::model::id::{MessageId, ChannelId, UserId};
-use serenity::model::prelude::Message;
+use serenity::model::id::{ChannelId, MessageId, UserId};
 use serenity::model::prelude::command::CommandOptionType;
 use serenity::model::prelude::component::{ActionRowComponent, InputTextStyle};
-use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::prelude::interaction::message_component::MessageComponentInteraction;
 use serenity::model::prelude::interaction::modal::ModalSubmitInteraction;
+use serenity::model::prelude::interaction::InteractionResponseType;
+use serenity::model::prelude::Message;
+use serenity::model::Permissions;
 use serenity::prelude::*;
 use serenity::utils::Colour;
 use sqlx::{Pool, Sqlite};
@@ -33,10 +33,13 @@ pub struct BetState {
     pub ender: Option<Sender<bool>>,
     pub stopper: Option<Sender<()>>,
     pub msg: (MessageId, ChannelId),
-    pub teams: TeamNames
+    pub teams: TeamNames,
 }
 
-async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2], [i64; 2], [i64; 2])> {
+async fn calc_payout(
+    db: &Pool<Sqlite>,
+    bet_id: i64,
+) -> anyhow::Result<([f64; 2], [i64; 2], [i64; 2])> {
     let query = sqlx::query!(
         r#"
             SELECT target, bet_placed
@@ -44,7 +47,9 @@ async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2]
             WHERE bet = $1
         "#,
         bet_id
-    ).fetch_all(db).await?;
+    )
+    .fetch_all(db)
+    .await?;
 
     let mut totals = [0, 0];
     let mut bets = [0, 0];
@@ -63,29 +68,34 @@ async fn calc_payout(db: &Pool<Sqlite>, bet_id: i64) -> anyhow::Result<([f64; 2]
     let blu = totals[1] as f64;
 
     let mut red_mult = blu / red;
-    if !red_mult.is_normal() { red_mult = 0.0; }
+    if !red_mult.is_normal() {
+        red_mult = 0.0;
+    }
     let mut blu_mult = red / blu;
-    if !blu_mult.is_normal() { blu_mult = 0.0; }
-    Ok((
-        [
-            1.0 + red_mult,
-            1.0 + blu_mult,
-        ],
-        totals,
-        bets
-    ))
+    if !blu_mult.is_normal() {
+        blu_mult = 0.0;
+    }
+    Ok(([1.0 + red_mult, 1.0 + blu_mult], totals, bets))
 }
 
-async fn build_embed(db: &Pool<Sqlite>, bet_id: i64, team_names: &TeamNames) -> anyhow::Result<CreateEmbed> {
+async fn build_embed(
+    db: &Pool<Sqlite>,
+    bet_id: i64,
+    team_names: &TeamNames,
+) -> anyhow::Result<CreateEmbed> {
     let (payout, totals, bets) = calc_payout(db, bet_id).await?;
 
     let mut embd = CreateEmbed::default();
     embd.title(format!("Team {} vs Team {}", team_names[0], team_names[1]))
         .description("Predict and bet on the match outcome")
-        .fields([
-            (&team_names[0], format!("Bets: {}\nPool: {} koins\nPayout: x{:.2}", bets[0], totals[0], payout[0]), true),
-            (&team_names[1], format!("Bets: {}\nPool: {} koins\nPayout: x{:.2}", bets[1], totals[1], payout[1]), true)
-        ]);
+        .fields([0, 1].map(|i| (
+            &team_names[i],
+            format!(
+                "Bets: {}\nPool: {} koins\nPayout: x{:.2}",
+                bets[i], totals[i], payout[i]
+            ),
+            true,
+        )));
     Ok(embd)
 }
 
@@ -104,26 +114,42 @@ pub fn build_components(team_names: &TeamNames) -> CreateComponents {
     comp
 }
 
-async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_id: &str) -> anyhow::Result<()> {
+async fn finalise_bet(
+    ctx: &Context,
+    int: Arc<ModalSubmitInteraction>,
+    initial_id: &str,
+) -> anyhow::Result<()> {
     let amnt = &int.data.components[0].components[0];
     let data = ctx.data.read().await;
     let db = data.get::<Database>().unwrap();
     let state_mutex = data.get::<CtxState>().unwrap();
 
     if let ActionRowComponent::InputText(e) = amnt {
-        let e = e.value
+        let e = e
+            .value
             .parse::<u32>()
             .ok()
             .and_then(|e| if e > 0 { Some(e) } else { None });
         if let Some(amnt) = e {
             let state = state_mutex.read().await;
-            let success = db_setbet(db, int.message.as_ref().unwrap().id, int.user.id, amnt, initial_id == "bettwo").await?;
+            let success = db_setbet(
+                db,
+                int.message.as_ref().unwrap().id,
+                int.user.id,
+                amnt,
+                initial_id == "bettwo",
+            )
+            .await?;
             if !success {
                 intr_emsg!(int, ctx, "You don't have enough koins to bet this much").await?;
                 return Ok(());
             }
 
-            intr_emsg!(int, ctx, format!("You've bet {}. Note that payout may change as more people start putting bets.", amnt)).await?;
+            intr_emsg!(int, ctx, format!(
+                "You've bet {}. Note that payout may change as more people start putting bets.",
+                amnt
+            ))
+            .await?;
 
             let embed = build_embed(db, state.msg.0.into(), &state.teams).await?;
             state.msg.1.edit_message(&ctx.http, state.msg.0, |d| d.set_embed(embed)).await?;
@@ -135,7 +161,11 @@ async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_i
     Ok(())
 }
 
-async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: MessageId) -> anyhow::Result<()> {
+async fn prompt_bet(
+    ctx: &Context,
+    int: Arc<MessageComponentInteraction>,
+    msg: MessageId,
+) -> anyhow::Result<()> {
     let data = ctx.data.read().await;
     let db = data.get::<Database>().unwrap();
 
@@ -151,7 +181,10 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
         "#,
         msg_id,
         discord_id
-    ).fetch_optional(db).await?.is_some();
+    )
+    .fetch_optional(db)
+    .await?
+    .is_some();
 
     if check {
         intr_emsg!(int, ctx, "You've already set a bet!").await?;
@@ -165,7 +198,9 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
         ",
         discord_id,
         1000
-    ).execute(db).await?;
+    )
+    .execute(db)
+    .await?;
     let coins = sqlx::query!(
         "
             SELECT coins
@@ -174,7 +209,9 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
             LIMIT 1
         ",
         discord_id
-    ).fetch_one(db).await?;
+    )
+    .fetch_one(db)
+    .await?;
     drop(data);
 
     let cid = format!("betamnt{}", int.id);
@@ -184,18 +221,22 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
             .interaction_response_data(|data| {
                 data.custom_id(clone)
                     .title("Set your bet amount")
-                    .components(|c| c.create_action_row(|roww| {
-                        roww.create_input_text(|text| {
-                            text.custom_id("betinput")
-                                .label("Bet amount")
-                                .placeholder(format!("You currently have {} koins", coins.coins))
-                                .style(InputTextStyle::Short)
+                    .components(|cmp| {
+                        cmp.create_action_row(|row| {
+                            row.create_input_text(|text| {
+                                text.custom_id("betinput")
+                                    .label("Bet amount")
+                                    .placeholder(format!("You currently have {} koins", coins.coins))
+                                    .style(InputTextStyle::Short)
+                            })
                         })
-                    }))
+                    })
             })
-    }).await?;
+    })
+    .await?;
 
-    let modal_int = CollectModalInteraction::new(ctx).message_id(msg)
+    let modal_int = CollectModalInteraction::new(ctx)
+        .message_id(msg)
         .timeout(Duration::from_secs(60))
         .author_id(int.user.id)
         .filter(move |c| c.data.custom_id == cid)
@@ -209,7 +250,13 @@ async fn prompt_bet(ctx: &Context, int: Arc<MessageComponentInteraction>, msg: M
     Ok(())
 }
 
-async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, team: bool) -> anyhow::Result<bool> {
+async fn db_setbet(
+    db: &Pool<Sqlite>,
+    msg: MessageId,
+    user: UserId,
+    amnt: u32,
+    team: bool,
+) -> anyhow::Result<bool> {
     let msg_id: i64 = msg.into();
     let discord_id: i64 = user.into();
 
@@ -221,10 +268,12 @@ async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, t
             LIMIT 1
         ",
         discord_id
-    ).fetch_one(db).await?;
+    )
+    .fetch_one(db)
+    .await?;
 
     if res.coins < amnt.into() {
-        return Ok(false)
+        return Ok(false);
     }
 
     let datetime = chrono::offset::Utc::now();
@@ -240,7 +289,9 @@ async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, t
         datetime,
         amnt,
         msg_id
-    ).execute(db).await?;
+    )
+    .execute(db)
+    .await?;
 
     sqlx::query!(
         "
@@ -250,16 +301,30 @@ async fn db_setbet(db: &Pool<Sqlite>, msg: MessageId, user: UserId, amnt: u32, t
         ",
         amnt,
         discord_id
-    ).execute(db).await?;
+    )
+    .execute(db)
+    .await?;
 
     Ok(true)
 }
 
-async fn send_user(ctx: &Context, user: UserId, embed: CreateEmbed) -> Result<Message, SerenityError> {
-    user.create_dm_channel(ctx).await?.send_message(ctx, |c| c.set_embed(embed)).await
+async fn send_user(
+    ctx: &Context,
+    user: UserId,
+    embed: CreateEmbed,
+) -> Result<Message, SerenityError> {
+    user.create_dm_channel(ctx)
+        .await?
+        .send_message(ctx, |c| c.set_embed(embed))
+        .await
 }
 
-async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool) -> anyhow::Result<()> {
+async fn db_payout(
+    ctx: &Context,
+    db: &Pool<Sqlite>,
+    msg: &Message,
+    winner: bool,
+) -> anyhow::Result<()> {
     let msg_id: i64 = msg.id.into();
     let payout = calc_payout(db, msg_id).await?.0;
     let payout = payout[usize::from(winner)];
@@ -270,7 +335,9 @@ async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool
             WHERE bet = $1
         "#,
         msg_id
-    ).fetch_all(db).await?;
+    )
+    .fetch_all(db)
+    .await?;
     let mut msgq = vec![];
     for row in events {
         let mut embd = CreateEmbed::default();
@@ -286,15 +353,21 @@ async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool
                 coins,
                 row.discord_id
             )
-                .execute(db)
-                .await?;
-            embd
-                .colour(Colour::from_rgb(0, 255, 0))
-                .description(format!("You won {} koins from [this bet]({})", coins, msg.link()));
+            .execute(db)
+            .await?;
+            embd.colour(Colour::from_rgb(0, 255, 0))
+                .description(format!(
+                    "You won {} koins from [this bet]({})",
+                    coins,
+                    msg.link()
+                ));
         } else {
-            embd
-                .colour(Colour::from_rgb(255, 0, 0))
-                .description(format!("You lost {} koins from [this bet]({})", row.bet_placed, msg.link()));
+            embd.colour(Colour::from_rgb(255, 0, 0))
+                .description(format!(
+                    "You lost {} koins from [this bet]({})",
+                    row.bet_placed,
+                    msg.link()
+                ));
         }
 
         let msg = send_user(ctx, UserId(row.discord_id as u64), embd);
@@ -326,12 +399,15 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .to_string()
     });
 
-    let msg = int.channel_id.send_message(&ctx.http, |rmsg| {
-        rmsg.add_embed(|embd|
+    let msg = int
+        .channel_id
+        .send_message(&ctx.http, |rmsg| {
+            rmsg.add_embed(|embd| {
                 embd.title(format!("Team {} vs Team {}", &teams[0], &teams[1]))
                     .description("Predict and bet on the match outcome")
-            )
-    }).await?;
+            })
+        })
+        .await?;
     let mut interaction_stream = msg.await_component_interactions(ctx).build();
 
     // /* Init state
@@ -341,12 +417,14 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         ender: Some(end_sender),
         stopper: Some(stop_sender),
         msg: (msg.id, msg.channel_id),
-        teams
+        teams,
     };
     let mutex = Arc::new(RwLock::new(state));
-    ctx.data.write().await.insert::<CtxState>(Arc::clone(&mutex));
+    ctx.data
+        .write()
+        .await
+        .insert::<CtxState>(Arc::clone(&mutex));
     //    Init state */
-
     // /* Create db bet
     {
         let data = ctx.data.read().await;
@@ -360,17 +438,20 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             "#,
             msg_id,
             datetime
-        ).execute(db).await?;
+        )
+        .execute(db)
+        .await?;
 
         let state = mutex.read().await;
         let embed = build_embed(db, msg_id, &state.teams).await?;
-        state.msg.1.edit_message(&ctx.http, msg.id, |nmsg| {
-            nmsg.set_components(build_components(&state.teams))
-                .set_embed(embed)
-        }).await?;
+        state.msg.1
+            .edit_message(&ctx.http, msg.id, |nmsg| {
+                nmsg.set_components(build_components(&state.teams))
+                    .set_embed(embed)
+            })
+            .await?;
     }
     //    Create db bet */
-
     intr_emsg!(int, ctx, "Bet ready").await?;
 
     let mut end_res = None;
@@ -385,16 +466,29 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         let uid = *interaction.user.id.as_u64();
         let span = info_span!("prompt_bet", iid, uid);
 
-        let handle = tokio::spawn(async move {
-            if let Err(why) = prompt_bet(&ctx, interaction, msg.id).await {
-                warn!("Int {} by {} errored: {}\n{}", iid, uid, why, why.backtrace());
+        let handle = tokio::spawn(
+            async move {
+                if let Err(why) = prompt_bet(&ctx, interaction, msg.id).await {
+                    warn!(
+                        "Int {} by {} errored: {}\n{}",
+                        iid,
+                        uid,
+                        why,
+                        why.backtrace()
+                    );
+                }
             }
-        }.instrument(span));
+            .instrument(span),
+        );
         handles.push(handle);
     }
 
     // Clear components (after stop/end received)
-    msg.channel_id.edit_message(&ctx, msg.id, |m| m.set_components(CreateComponents::default())).await?;
+    msg.channel_id
+        .edit_message(&ctx, msg.id, |m| {
+            m.set_components(CreateComponents::default())
+        })
+        .await?;
 
     // If not ended, wait til ended
     if end_res.is_none() {
@@ -421,7 +515,9 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         datetime,
         end_res,
         mid
-    ).execute(db).await?;
+    )
+    .execute(db)
+    .await?;
 
     db_payout(ctx, db, &msg, end_res).await?;
     data.remove::<CtxState>();

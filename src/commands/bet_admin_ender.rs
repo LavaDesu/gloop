@@ -3,11 +3,11 @@ use std::time::Duration;
 use serenity::builder::CreateApplicationCommand;
 use serenity::client::Context;
 use serenity::collector::CollectModalInteraction;
-use serenity::model::Permissions;
 use serenity::model::prelude::command::CommandType;
 use serenity::model::prelude::component::{ActionRowComponent, InputTextStyle};
-use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
+use serenity::model::prelude::interaction::InteractionResponseType;
+use serenity::model::Permissions;
 
 use crate::commands::bet::CtxState;
 
@@ -15,7 +15,8 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     let data = ctx.data.read().await;
 
     if let Some(state) = data.get::<CtxState>() {
-        if matches!(int.data.target_id, Some(id) if id.as_u64() == state.read().await.msg.0.as_u64()) {
+        if matches!(int.data.target_id, Some(id) if id.as_u64() == state.read().await.msg.0.as_u64())
+        {
             let cid = format!("winner{}", int.id);
             let clone = cid.clone();
             int.create_interaction_response(&ctx, |resp| {
@@ -23,16 +24,19 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                     .interaction_response_data(|data| {
                         data.custom_id(clone)
                             .title("Select winner")
-                            .components(|c| c.create_action_row(|roww| {
-                                roww.create_input_text(|text| {
-                                    text.custom_id("winner")
-                                        .label("Winner")
-                                        .placeholder("1 for Red (1st), 2 for Blue (2nd)")
-                                        .style(InputTextStyle::Short)
+                            .components(|cmp| {
+                                cmp.create_action_row(|row| {
+                                    row.create_input_text(|text| {
+                                        text.custom_id("winner")
+                                            .label("Winner")
+                                            .placeholder("1 for Red (1st), 2 for Blue (2nd)")
+                                            .style(InputTextStyle::Short)
+                                    })
                                 })
-                            }))
+                            })
                     })
-            }).await?;
+            })
+            .await?;
 
             let nint = CollectModalInteraction::new(&ctx.shard)
                 .timeout(Duration::from_secs(300))
@@ -48,8 +52,8 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                         "1" => Some(false),
                         "2" => Some(true),
                         _ => None,
-                    }
-                    _ => None
+                    },
+                    _ => None,
                 };
 
                 if let Some(win) = winner {
