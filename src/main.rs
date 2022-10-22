@@ -10,7 +10,6 @@ use serenity::model::application::interaction::Interaction;
 use serenity::model::{id::GuildId, gateway::Ready};
 use serenity::prelude::*;
 use sqlx::{sqlite::SqlitePoolOptions, Sqlite, Pool, migrate::Migrator};
-use tokio::try_join;
 use tracing::{error, info, warn, trace};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
@@ -111,17 +110,15 @@ async fn main() -> anyhow::Result<()> {
     env::var("BLOB_DEV_GUILD").expect("Missing BLOB_DEV_GUILD")
         .parse::<u64>().expect("BLOB_DEV_GUILD must be a u64");
 
-    let (db,) = try_join!(setup_db(db_url))?;
-
     let mut client = Client::builder(token, GatewayIntents::empty())
         .event_handler(Handler)
         .await
         .expect("Error creating client");
 
-    {
-        let mut data = client.data.write().await;
-        data.insert::<Database>(db);
-    }
+    let db = setup_db(db_url).await?;
+    let mut data = client.data.write().await;
+    data.insert::<Database>(db);
+    drop(data);
 
     if let Err(why) = client.start().await {
         error!("Client error: {:?}", why);
