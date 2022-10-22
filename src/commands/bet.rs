@@ -384,8 +384,7 @@ async fn db_payout(
 
 pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
     if ctx.data.read().await.contains_key::<CtxState>() {
-        intr_emsg!(int, ctx, "There's already a bet running at (msg placeholder)").await?;
-
+        intr_emsg!(int, ctx, "There's already a bet running!").await?;
         return Ok(());
     }
 
