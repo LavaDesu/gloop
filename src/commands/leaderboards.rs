@@ -33,8 +33,8 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         .intersperse("\n".to_string())
         .collect::<String>();
 
-    int.create_followup_message(&ctx.http, |res| {
-        res.embed(|embd| {
+    int.create_followup_message(&ctx.http, |msg| {
+        msg.embed(|embd| {
             embd.title("Cambodia Osu Cup Koins Leaderboards")
                 .description(res)
                 .colour(Colour::from_rgb(0, 0, 255))
