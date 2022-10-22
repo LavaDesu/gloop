@@ -326,30 +326,26 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .to_string()
     });
 
+    let msg = int.channel_id.send_message(&ctx.http, |rmsg| {
+        rmsg.add_embed(|embd|
+                embd.title(format!("Team {} vs Team {}", &teams[0], &teams[1]))
+                    .description("Predict and bet on the match outcome")
+            )
+    }).await?;
+    let mut interaction_stream = msg.await_component_interactions(ctx).build();
+
     // /* Init state
+    let (stop_sender, mut stop_receiver) = oneshot::channel::<()>();
+    let (end_sender, mut end_receiver) = oneshot::channel::<bool>();
     let state = BetState {
-        ender: None,
-        stopper: None,
-        msg: (MessageId(0), ChannelId(0)),
+        ender: Some(end_sender),
+        stopper: Some(stop_sender),
+        msg: (msg.id, msg.channel_id),
         teams
     };
     let mutex = Arc::new(RwLock::new(state));
     ctx.data.write().await.insert::<CtxState>(Arc::clone(&mutex));
     //    Init state */
-
-    // /* Send messages
-    let state = mutex.read().await;
-    // Bet message
-    let msg = int.channel_id.send_message(&ctx.http, move |rmsg| {
-        rmsg.add_embed(|embd|
-                embd.title(format!("Team {} vs Team {}", &state.teams[0], &state.teams[1]))
-                    .description("Predict and bet on the match outcome")
-            )
-    }).await?;
-    mutex.write().await.msg = (msg.id, msg.channel_id);
-    let mut interaction_stream = msg.await_component_interactions(ctx).build();
-    intr_emsg!(int, ctx, "sentt").await?;
-    //    Send messages */
 
     // /* Create db bet
     {
@@ -375,14 +371,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     }
     //    Create db bet */
 
-    // /* Init oneshots
-    let mut state = mutex.write().await;
-    let (stop_sender, mut stop_receiver) = oneshot::channel::<()>();
-    let (end_sender, mut end_receiver) = oneshot::channel::<bool>();
-    state.stopper = Some(stop_sender);
-    state.ender = Some(end_sender);
-    drop(state);
-    //    Init oneshots */
+    intr_emsg!(int, ctx, "Bet ready").await?;
 
     let mut end_res = None;
     let mut handles = vec![];
@@ -394,11 +383,13 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         let ctx = ctx.clone();
         let msg = msg.clone();
 
-        let iid = interaction.id.as_u64();
-        let uid = interaction.user.id.as_u64();
+        let iid = interaction.id.as_u64().clone();
+        let uid = interaction.user.id.as_u64().clone();
         let span = info_span!("prompt_bet", iid, uid);
         let handle = tokio::spawn(async move {
-            prompt_bet(&ctx, interaction, msg.id).await.unwrap();
+            if let Err(why) = prompt_bet(&ctx, interaction, msg.id).await {
+                tracing::warn!("Int {} by {} errored: {}\n{}", iid, uid, why, why.backtrace());
+            }
         }.instrument(span));
         handles.push(handle);
     }
