@@ -381,11 +381,10 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         e = &mut end_receiver => { end_res = Some(e.unwrap()); None },
     } {
         let ctx = ctx.clone();
-        let msg = msg.clone();
-
-        let iid = interaction.id.as_u64().clone();
-        let uid = interaction.user.id.as_u64().clone();
+        let iid = *interaction.id.as_u64();
+        let uid = *interaction.user.id.as_u64();
         let span = info_span!("prompt_bet", iid, uid);
+
         let handle = tokio::spawn(async move {
             if let Err(why) = prompt_bet(&ctx, interaction, msg.id).await {
                 warn!("Int {} by {} errored: {}\n{}", iid, uid, why, why.backtrace());
