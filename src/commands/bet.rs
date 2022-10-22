@@ -111,7 +111,11 @@ async fn finalise_bet(ctx: &Context, int: Arc<ModalSubmitInteraction>, initial_i
     let state_mutex = data.get::<CtxState>().unwrap();
 
     if let ActionRowComponent::InputText(e) = amnt {
-        if let Ok(amnt) = e.value.parse::<u32>() {
+        let e = e.value
+            .parse::<u32>()
+            .ok()
+            .and_then(|e| if e > 0 { Some(e) } else { None });
+        if let Some(amnt) = e {
             let state = state_mutex.read().await;
             let success = db_setbet(db, int.message.as_ref().unwrap().id, int.user.id, amnt, initial_id == "bettwo").await?;
             if !success {
