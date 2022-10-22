@@ -6,7 +6,7 @@ use serenity::collector::CollectModalInteraction;
 use serenity::futures::StreamExt;
 use serenity::model::id::{ChannelId, MessageId, UserId};
 use serenity::model::prelude::command::CommandOptionType;
-use serenity::model::prelude::component::{ActionRowComponent, InputTextStyle};
+use serenity::model::prelude::component::{ActionRowComponent, InputTextStyle, ButtonStyle};
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
 use serenity::model::prelude::interaction::message_component::MessageComponentInteraction;
 use serenity::model::prelude::interaction::modal::ModalSubmitInteraction;
@@ -88,6 +88,7 @@ async fn build_embed(
     let mut embd = CreateEmbed::default();
     embd.title(format!("Team {} vs Team {}", team_names[0], team_names[1]))
         .description("Predict and bet on the match outcome")
+        .colour(Colour(0x00FF00))
         .fields([0, 1].map(|i| (
             &team_names[i],
             format!(
@@ -105,6 +106,7 @@ pub fn build_components(team_names: &TeamNames) -> CreateComponents {
         roww.create_button(|butn| {
                 butn.custom_id("betone")
                     .label(format!("Bet for Team {}", team_names[0]))
+                    .style(ButtonStyle::Danger)
             })
             .create_button(|butn| {
                 butn.custom_id("bettwo")
@@ -355,14 +357,14 @@ async fn db_payout(
             )
             .execute(db)
             .await?;
-            embd.colour(Colour::from_rgb(0, 255, 0))
+            embd.colour(Colour(0x00FF00))
                 .description(format!(
                     "You won {} koins from [this bet]({})",
                     coins,
                     msg.link()
                 ));
         } else {
-            embd.colour(Colour::from_rgb(255, 0, 0))
+            embd.colour(Colour::RED)
                 .description(format!(
                     "You lost {} koins from [this bet]({})",
                     row.bet_placed,
@@ -482,17 +484,25 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         handles.push(handle);
     }
 
-    // Clear components (after stop/end received)
-    msg.channel_id
-        .edit_message(&ctx, msg.id, |m| {
-            m.set_components(CreateComponents::default())
-        })
-        .await?;
-
-    // If not ended, wait til ended
+    // If not ended; only stopped
     if end_res.is_none() {
+        let data = ctx.data.read().await;
+        let db = data.get::<Database>().unwrap();
+        let state = mutex.read().await;
+        let mut embed = build_embed(db, msg.id.into(), &state.teams).await?;
+        drop(state);
+        embed.colour(Colour::ORANGE);
+        embed.description("Bets are no longer being accepted. Sit tight for results!");
+        msg.channel_id
+            .edit_message(&ctx, msg.id, |emsg| {
+                emsg.set_components(CreateComponents::default())
+                    .set_embed(embed)
+            })
+            .await?;
+
         end_res = Some(end_receiver.await?);
     }
+
     for handle in handles {
         handle.abort();
     }
@@ -518,7 +528,22 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     .execute(db)
     .await?;
 
+    let state = mutex.read().await;
+    let mut embed = build_embed(db, msg.id.into(), &state.teams).await?;
+    embed.colour(if end_res { Colour::BLUE } else { Colour::RED });
+    embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(end_res)]));
+    if let Err(why) = msg.channel_id
+        .edit_message(&ctx, msg.id, |emsg| {
+            emsg.set_components(CreateComponents::default())
+                .set_embed(embed)
+        })
+        .await
+    {
+        warn!("Failed to edit bet message for {}: {}", msg.id.as_u64(), why);
+    }
+
     db_payout(ctx, db, &msg, end_res).await?;
+
     data.remove::<CtxState>();
     Ok(())
 }

@@ -37,7 +37,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         msg.embed(|embd| {
             embd.title("Cambodia Osu Cup Koins Leaderboards")
                 .description(res)
-                .colour(Colour::from_rgb(0, 0, 255))
+                .colour(Colour(0x00FF00))
         })
     })
     .await?;
