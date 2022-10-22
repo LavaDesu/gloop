@@ -302,7 +302,8 @@ async fn db_payout(ctx: &Context, db: &Pool<Sqlite>, msg: &Message, winner: bool
     }
 
     for f in msgq {
-        f.await?;
+        // discard error if dm unable to be sent (eg. user disabled dms)
+        let _ = f.await;
     }
 
     Ok(())
