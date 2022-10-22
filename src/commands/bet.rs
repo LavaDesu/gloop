@@ -17,7 +17,7 @@ use serenity::prelude::*;
 use serenity::utils::Colour;
 use sqlx::{Pool, Sqlite};
 use tokio::sync::oneshot::{self, Sender};
-use tracing::{info_span, Instrument};
+use tracing::Instrument;
 
 use crate::Database;
 
@@ -388,7 +388,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         let span = info_span!("prompt_bet", iid, uid);
         let handle = tokio::spawn(async move {
             if let Err(why) = prompt_bet(&ctx, interaction, msg.id).await {
-                tracing::warn!("Int {} by {} errored: {}\n{}", iid, uid, why, why.backtrace());
+                warn!("Int {} by {} errored: {}\n{}", iid, uid, why, why.backtrace());
             }
         }.instrument(span));
         handles.push(handle);

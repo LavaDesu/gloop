@@ -1,7 +1,9 @@
 #![feature(array_methods)]
 #![feature(iter_intersperse)]
 
+#[macro_use] extern crate tracing;
 #[macro_use] mod macros;
+
 mod commands;
 use std::{env, path::PathBuf};
 
@@ -10,7 +12,6 @@ use serenity::model::application::interaction::Interaction;
 use serenity::model::{id::GuildId, gateway::Ready};
 use serenity::prelude::*;
 use sqlx::{sqlite::SqlitePoolOptions, Sqlite, Pool, migrate::Migrator};
-use tracing::{error, info, warn, trace};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -38,7 +39,7 @@ impl EventHandler for Handler {
 
             if let Err(why) = run
             {
-                warn!("Cannot respond to slash command: {} {}", why, why.backtrace());
+                warn!("Slash command {} failed: {}\n{}", cmd.data.name, why, why.backtrace());
             }
         }
     }
