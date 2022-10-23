@@ -1,14 +1,14 @@
 {
   "db": "SQLite",
-  "15abfa10268399b9eae56d74da9530581aed6570d8c9fb41da9a0e8733dec47f": {
+  "11fc8b614f86df01bb4a9d57ef9bf7f59174c072cf8985c921ae302f328e46ed": {
     "describe": {
       "columns": [],
       "nullable": [],
       "parameters": {
-        "Right": 3
+        "Right": 2
       }
     },
-    "query": "\n            UPDATE bets\n            SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,\n                end_time = $1,\n                blue_win = $2\n            WHERE msg_id = $3\n        "
+    "query": "\n                            UPDATE bets\n                            SET stop_time = $1\n                            WHERE msg_id = $2\n                        "
   },
   "225929aa411e7d59662b91e1da581de11eb99a4c5a4c388e8435bde777657597": {
     "describe": {
@@ -57,6 +57,44 @@
       }
     },
     "query": "\n            SELECT target, bet_placed\n            FROM bets_events\n            WHERE bet = $1\n        "
+  },
+  "3841c8f10b399d3db421c97d73970ebf0c47fd0e477ae0eee8f87225555029b6": {
+    "describe": {
+      "columns": [
+        {
+          "name": "discord_id",
+          "ordinal": 0,
+          "type_info": "Int64"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Right": 2
+      }
+    },
+    "query": "\n                SELECT discord_id\n                FROM bets_events\n                WHERE bet = $1\n                AND discord_id = $2\n                LIMIT 1\n            "
+  },
+  "47a6e9e8ebd2eaacf8e717e01ee19591bf0504c2da5306b82f47127efb615cd0": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Right": 2
+      }
+    },
+    "query": "\n                INSERT OR IGNORE INTO currency (discord_id, coins)\n                VALUES ($1, $2)\n            "
+  },
+  "47ac2c54ad9021e85244e500fb847106026e8a5f688b348bfc248dab5a3cdfbe": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Right": 3
+      }
+    },
+    "query": "\n                UPDATE bets\n                SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,\n                    end_time = $1,\n                    blue_win = $2\n                WHERE msg_id = $3\n            "
   },
   "52b61fdb051f1863eb25ea5042d9fad546891cad0348c3811f9c7ba1ff4e6a06": {
     "describe": {
@@ -146,24 +184,6 @@
     },
     "query": "\n            SELECT discord_id, target, bet_placed\n            FROM bets_events\n            WHERE bet = $1\n        "
   },
-  "8709d7a8cddca141c2395e314c7a5464d6586c029c28251c68217a6595578a1a": {
-    "describe": {
-      "columns": [
-        {
-          "name": "discord_id",
-          "ordinal": 0,
-          "type_info": "Int64"
-        }
-      ],
-      "nullable": [
-        false
-      ],
-      "parameters": {
-        "Right": 2
-      }
-    },
-    "query": "\n            SELECT discord_id\n            FROM bets_events\n            WHERE bet = $1\n            AND discord_id = $2\n            LIMIT 1\n        "
-  },
   "b0bd6217a0b8a34d2cee546fcbbf376f40c51cade4e98d931a0a084c453a6b6e": {
     "describe": {
       "columns": [],
@@ -174,7 +194,7 @@
     },
     "query": "\n                    UPDATE currency\n                    SET coins = coins + $1\n                    WHERE discord_id = $2\n                "
   },
-  "e5c64aa6d67a5b9b65eec2c12294f61821c56de2c759663573d0bd3482906ee6": {
+  "e162cf2bedca23d67e40ce281da76537fe118866412f342848262fb3397a0bfb": {
     "describe": {
       "columns": [],
       "nullable": [],
@@ -182,6 +202,24 @@
         "Right": 2
       }
     },
-    "query": "\n                        UPDATE bets\n                        SET stop_time = $1\n                        WHERE msg_id = $2\n                    "
+    "query": "\n                        UPDATE currency\n                        SET coins = coins + $1\n                        WHERE discord_id = $2\n                    "
+  },
+  "f3c9d7c0fd59a4c0bbea9b5b087a029ea5799abafac9276a16424f355fd942cd": {
+    "describe": {
+      "columns": [
+        {
+          "name": "coins",
+          "ordinal": 0,
+          "type_info": "Int64"
+        }
+      ],
+      "nullable": [
+        false
+      ],
+      "parameters": {
+        "Right": 1
+      }
+    },
+    "query": "\n                SELECT coins\n                FROM currency\n                WHERE discord_id = $1\n                LIMIT 1\n            "
   }
 }
