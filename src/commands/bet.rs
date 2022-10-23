@@ -31,7 +31,7 @@ type TeamNames = [String; 2];
 
 #[derive(Clone)]
 pub struct BetData {
-    pub ender: Arc<Mutex<Option<Sender<bool>>>>,
+    pub ender: Arc<Mutex<Option<Sender<Option<bool>>>>>,
     pub stopper: Arc<Mutex<Option<Sender<()>>>>,
     pub msg: (MessageId, ChannelId),
     pub teams: TeamNames,
@@ -324,11 +324,10 @@ async fn db_payout(
     ctx: &Context,
     db: &Pool<Sqlite>,
     msg: &Message,
-    winner: bool,
+    winner: Option<bool>,
 ) -> anyhow::Result<()> {
     let msg_id: i64 = msg.id.into();
     let payout = calc_payout(db, msg_id).await?.0;
-    let payout = payout[usize::from(winner)];
     let events = sqlx::query!(
         r#"
             SELECT discord_id, target, bet_placed
@@ -343,29 +342,50 @@ async fn db_payout(
     for row in events {
         let mut embd = CreateEmbed::default();
         embd.title("You got mail!");
-        if row.target == winner {
-            let coins = row.bet_placed as f64 * payout;
+        if let Some(winner) = winner {
+            if row.target == winner {
+                let payout = payout[usize::from(winner)];
+                let coins = row.bet_placed as f64 * payout;
+                sqlx::query!(
+                    "
+                        UPDATE currency
+                        SET coins = coins + $1
+                        WHERE discord_id = $2
+                    ",
+                    coins,
+                    row.discord_id
+                )
+                .execute(db)
+                .await?;
+                embd.colour(Colour(0x00FF00))
+                    .description(format!(
+                        "You won {} koins from [this bet]({})",
+                        coins,
+                        msg.link()
+                    ));
+            } else {
+                embd.colour(Colour::RED)
+                    .description(format!(
+                        "You lost {} koins from [this bet]({})",
+                        row.bet_placed,
+                        msg.link()
+                    ));
+            }
+        } else {
             sqlx::query!(
                 "
                     UPDATE currency
                     SET coins = coins + $1
                     WHERE discord_id = $2
                 ",
-                coins,
+                row.bet_placed,
                 row.discord_id
             )
             .execute(db)
             .await?;
-            embd.colour(Colour(0x00FF00))
+            embd.colour(Colour(0))
                 .description(format!(
-                    "You won {} koins from [this bet]({})",
-                    coins,
-                    msg.link()
-                ));
-        } else {
-            embd.colour(Colour::RED)
-                .description(format!(
-                    "You lost {} koins from [this bet]({})",
+                    "You've been refunded {} koins from [this bet]({})",
                     row.bet_placed,
                     msg.link()
                 ));
@@ -411,8 +431,8 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     let mut interaction_stream = msg.await_component_interactions(ctx).build();
 
     // /* Init state
-    let (stop_sender, mut stop_receiver) = oneshot::channel::<()>();
-    let (end_sender, mut end_receiver) = oneshot::channel::<bool>();
+    let (stop_sender, mut stop_receiver) = oneshot::channel();
+    let (end_sender, mut end_receiver) = oneshot::channel();
     let state = BetData {
         ender: Arc::new(Mutex::new(Some(end_sender))),
         stopper: Arc::new(Mutex::new(Some(stop_sender))),
@@ -526,8 +546,13 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         build_embed(db, msg.id.into(), &state.teams).await?
     });
 
-    embed.colour(if end_res { Colour::BLUE } else { Colour::RED });
-    embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(end_res)]));
+    if let Some(end_res) = end_res {
+        embed.colour(if end_res { Colour::BLUE } else { Colour::RED });
+        embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(end_res)]));
+    } else {
+        embed.colour(Colour(0));
+        embed.description("Match is cancelled. Bets have been refunded.");
+    }
 
     if let Err(why) = msg.channel_id
         .edit_message(&ctx, msg.id, |emsg| {

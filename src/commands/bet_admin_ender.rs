@@ -29,7 +29,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                                     row.create_input_text(|text| {
                                         text.custom_id("winner")
                                             .label("Winner")
-                                            .placeholder("1 for Red (1st), 2 for Blue (2nd)")
+                                            .placeholder("0 to refund (no winner), 1 for Red, 2 for Blue")
                                             .style(InputTextStyle::Short)
                                     })
                                 })
@@ -49,8 +49,9 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                 let winner = &nint.data.components[0].components[0];
                 let winner = match winner {
                     ActionRowComponent::InputText(e) => match e.value.as_str() {
-                        "1" => Some(false),
-                        "2" => Some(true),
+                        "0" => Some(None),
+                        "1" => Some(Some(false)),
+                        "2" => Some(Some(true)),
                         _ => None,
                     },
                     _ => None,
