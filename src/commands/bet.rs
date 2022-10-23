@@ -347,6 +347,7 @@ async fn db_payout(
             if row.target == winner {
                 let payout = payout[usize::from(winner)];
                 let coins = row.bet_placed as f64 * payout;
+                let coins = coins.round() as i64;
                 sqlx::query!(
                     "
                         UPDATE currency
