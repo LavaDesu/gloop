@@ -294,13 +294,14 @@ async fn db_setbet(
     .execute(db)
     .await?;
 
+    let subamnt = amnt - std::cmp::min(amnt / 10, 100);
     sqlx::query!(
         "
             UPDATE currency
             SET coins = coins - $1
             WHERE discord_id = $2
         ",
-        amnt,
+        subamnt,
         discord_id
     )
     .execute(db)
