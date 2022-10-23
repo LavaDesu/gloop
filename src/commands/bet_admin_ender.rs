@@ -15,7 +15,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     let data = ctx.data.read().await;
 
     if let Some(state) = data.get::<CtxState>() {
-        if matches!(int.data.target_id, Some(id) if id.as_u64() == state.read().await.msg.0.as_u64())
+        if matches!(int.data.target_id, Some(id) if id.as_u64() == state.msg.0.as_u64())
         {
             let cid = format!("winner{}", int.id);
             let clone = cid.clone();
@@ -57,8 +57,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                 };
 
                 if let Some(win) = winner {
-                    let mut state = state.write().await;
-                    if let Some(ender) = state.ender.take() {
+                    if let Some(ender) = state.ender.lock().await.take() {
                         ender.send(win).unwrap();
                         intr_emsg!(nint, ctx, "Bets ended!").await?;
                         return Ok(());

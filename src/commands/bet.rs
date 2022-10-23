@@ -24,14 +24,15 @@ use crate::Database;
 pub struct CtxState;
 
 impl TypeMapKey for CtxState {
-    type Value = Arc<RwLock<BetState>>;
+    type Value = BetData;
 }
 
 type TeamNames = [String; 2];
 
-pub struct BetState {
-    pub ender: Option<Sender<bool>>,
-    pub stopper: Option<Sender<()>>,
+#[derive(Clone)]
+pub struct BetData {
+    pub ender: Arc<Mutex<Option<Sender<bool>>>>,
+    pub stopper: Arc<Mutex<Option<Sender<()>>>>,
     pub msg: (MessageId, ChannelId),
     pub teams: TeamNames,
 }
@@ -122,9 +123,6 @@ async fn finalise_bet(
     initial_id: &str,
 ) -> anyhow::Result<()> {
     let amnt = &int.data.components[0].components[0];
-    let data = ctx.data.read().await;
-    let db = data.get::<Database>().unwrap();
-    let state_mutex = data.get::<CtxState>().unwrap();
 
     if let ActionRowComponent::InputText(e) = amnt {
         let e = e
@@ -133,28 +131,29 @@ async fn finalise_bet(
             .ok()
             .and_then(|e| if e > 0 { Some(e) } else { None });
         if let Some(amnt) = e {
-            let state = state_mutex.read().await;
-            let success = db_setbet(
-                db,
-                int.message.as_ref().unwrap().id,
-                int.user.id,
-                amnt,
-                initial_id == "bettwo",
-            )
-            .await?;
-            if !success {
-                intr_emsg!(int, ctx, "You don't have enough koins to bet this much").await?;
-                return Ok(());
-            }
+            data_scope!(ctx, db = Database, state = CtxState, {
+                let success = db_setbet(
+                    db,
+                    int.message.as_ref().unwrap().id,
+                    int.user.id,
+                    amnt,
+                    initial_id == "bettwo",
+                )
+                .await?;
+                if !success {
+                    intr_emsg!(int, ctx, "You don't have enough koins to bet this much").await?;
+                    return Ok(());
+                }
 
-            intr_emsg!(int, ctx, format!(
-                "You've bet {}. Note that payout may change as more people start putting bets.",
-                amnt
-            ))
-            .await?;
+                intr_emsg!(int, ctx, format!(
+                    "You've bet {}. Note that payout may change as more people start putting bets.",
+                    amnt
+                ))
+                .await?;
 
-            let embed = build_embed(db, state.msg.0.into(), &state.teams).await?;
-            state.msg.1.edit_message(&ctx.http, state.msg.0, |d| d.set_embed(embed)).await?;
+                let embed = build_embed(db, state.msg.0.into(), &state.teams).await?;
+                state.msg.1.edit_message(&ctx.http, state.msg.0, |d| d.set_embed(embed)).await?;
+            });
         } else {
             intr_emsg!(int, ctx, "Failed to parse bet amount (are you sure it's a valid, positive, no-decimal number?)").await?;
         }
@@ -168,53 +167,53 @@ async fn prompt_bet(
     int: Arc<MessageComponentInteraction>,
     msg: MessageId,
 ) -> anyhow::Result<()> {
-    let data = ctx.data.read().await;
-    let db = data.get::<Database>().unwrap();
+    let coins = data_scope!(ctx, db = Database, {
+        let discord_id: i64 = int.user.id.into();
+        let msg_id: i64 = msg.into();
+        let check = sqlx::query!(
+            r#"
+                SELECT discord_id
+                FROM bets_events
+                WHERE bet = $1
+                AND discord_id = $2
+                LIMIT 1
+            "#,
+            msg_id,
+            discord_id
+        )
+        .fetch_optional(db)
+        .await?
+        .is_some();
 
-    let discord_id: i64 = int.user.id.into();
-    let msg_id: i64 = msg.into();
-    let check = sqlx::query!(
-        r#"
-            SELECT discord_id
-            FROM bets_events
-            WHERE bet = $1
-            AND discord_id = $2
-            LIMIT 1
-        "#,
-        msg_id,
-        discord_id
-    )
-    .fetch_optional(db)
-    .await?
-    .is_some();
+        if check {
+            intr_emsg!(int, ctx, "You've already set a bet!").await?;
+            return Ok(());
+        }
 
-    if check {
-        intr_emsg!(int, ctx, "You've already set a bet!").await?;
-        return Ok(());
-    }
+        sqlx::query!(
+            "
+                INSERT OR IGNORE INTO currency (discord_id, coins)
+                VALUES ($1, $2)
+            ",
+            discord_id,
+            1000
+        )
+        .execute(db)
+        .await?;
+        let coins = sqlx::query!(
+            "
+                SELECT coins
+                FROM currency
+                WHERE discord_id = $1
+                LIMIT 1
+            ",
+            discord_id
+        )
+        .fetch_one(db)
+        .await?;
 
-    sqlx::query!(
-        "
-            INSERT OR IGNORE INTO currency (discord_id, coins)
-            VALUES ($1, $2)
-        ",
-        discord_id,
-        1000
-    )
-    .execute(db)
-    .await?;
-    let coins = sqlx::query!(
-        "
-            SELECT coins
-            FROM currency
-            WHERE discord_id = $1
-            LIMIT 1
-        ",
-        discord_id
-    )
-    .fetch_one(db)
-    .await?;
-    drop(data);
+        coins.coins
+    });
 
     let cid = format!("betamnt{}", int.id);
     let clone = cid.clone();
@@ -228,7 +227,7 @@ async fn prompt_bet(
                             row.create_input_text(|text| {
                                 text.custom_id("betinput")
                                     .label("Bet amount")
-                                    .placeholder(format!("You currently have {} koins", coins.coins))
+                                    .placeholder(format!("You currently have {} koins", coins))
                                     .style(InputTextStyle::Short)
                             })
                         })
@@ -414,22 +413,20 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     // /* Init state
     let (stop_sender, mut stop_receiver) = oneshot::channel::<()>();
     let (end_sender, mut end_receiver) = oneshot::channel::<bool>();
-    let state = BetState {
-        ender: Some(end_sender),
-        stopper: Some(stop_sender),
+    let state = BetData {
+        ender: Arc::new(Mutex::new(Some(end_sender))),
+        stopper: Arc::new(Mutex::new(Some(stop_sender))),
         msg: (msg.id, msg.channel_id),
         teams,
     };
-    let mutex = Arc::new(RwLock::new(state));
     ctx.data
         .write()
         .await
-        .insert::<CtxState>(Arc::clone(&mutex));
+        .insert::<CtxState>(state.clone());
     //    Init state */
+
     // /* Create db bet
-    {
-        let data = ctx.data.read().await;
-        let db = data.get::<Database>().unwrap();
+    let embed = data_scope!(ctx, db = Database, {
         let msg_id: i64 = msg.id.into();
         let datetime = chrono::offset::Utc::now();
         sqlx::query!(
@@ -443,16 +440,16 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         .execute(db)
         .await?;
 
-        let state = mutex.read().await;
-        let embed = build_embed(db, msg_id, &state.teams).await?;
-        state.msg.1
-            .edit_message(&ctx.http, msg.id, |nmsg| {
-                nmsg.set_components(build_components(&state.teams))
-                    .set_embed(embed)
-            })
-            .await?;
-    }
+        build_embed(db, msg_id, &state.teams).await?
+    });
+    state.msg.1
+        .edit_message(&ctx.http, msg.id, |nmsg| {
+            nmsg.set_components(build_components(&state.teams))
+                .set_embed(embed)
+        })
+        .await?;
     //    Create db bet */
+
     intr_emsg!(int, ctx, "Bet ready").await?;
 
     let mut end_res = None;
@@ -486,11 +483,10 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
 
     // If not ended; only stopped
     if end_res.is_none() {
-        let data = ctx.data.read().await;
-        let db = data.get::<Database>().unwrap();
-        let state = mutex.read().await;
-        let mut embed = build_embed(db, msg.id.into(), &state.teams).await?;
-        drop(state);
+        let mut embed = data_scope!(ctx, db = Database, {
+            build_embed(db, msg.id.into(), &state.teams).await?
+        });
+
         embed.colour(Colour::ORANGE);
         embed.description("Bets are no longer being accepted. Sit tight for results!");
         msg.channel_id
@@ -507,31 +503,32 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         handle.abort();
     }
 
-    let mut data = ctx.data.write().await;
-    let db = data.get::<Database>().unwrap();
-    let datetime = chrono::offset::Utc::now();
     let end_res = end_res.unwrap();
-    let mid: i64 = msg.id.into();
+    let mut embed = data_scope!(ctx, db = Database, {
+        let datetime = chrono::offset::Utc::now();
+        let mid: i64 = msg.id.into();
 
-    sqlx::query!(
-        r#"
-            UPDATE bets
-            SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,
-                end_time = $1,
-                blue_win = $2
-            WHERE msg_id = $3
-        "#,
-        datetime,
-        end_res,
-        mid
-    )
-    .execute(db)
-    .await?;
+        sqlx::query!(
+            r#"
+                UPDATE bets
+                SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,
+                    end_time = $1,
+                    blue_win = $2
+                WHERE msg_id = $3
+            "#,
+            datetime,
+            end_res,
+            mid
+        )
+        .execute(db)
+        .await?;
 
-    let state = mutex.read().await;
-    let mut embed = build_embed(db, msg.id.into(), &state.teams).await?;
+        build_embed(db, msg.id.into(), &state.teams).await?
+    });
+
     embed.colour(if end_res { Colour::BLUE } else { Colour::RED });
     embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(end_res)]));
+
     if let Err(why) = msg.channel_id
         .edit_message(&ctx, msg.id, |emsg| {
             emsg.set_components(CreateComponents::default())
@@ -542,9 +539,11 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         warn!("Failed to edit bet message for {}: {}", msg.id.as_u64(), why);
     }
 
-    db_payout(ctx, db, &msg, end_res).await?;
+    data_scope!(ctx, db = Database, {
+        db_payout(ctx, db, &msg, end_res).await?;
+    });
 
-    data.remove::<CtxState>();
+    ctx.data.write().await.remove::<CtxState>();
     Ok(())
 }
 

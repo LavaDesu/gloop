@@ -12,24 +12,24 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
     let data = ctx.data.read().await;
 
     if let Some(state) = data.get::<CtxState>() {
-        let mut state = state.write().await;
         if matches!(int.data.target_id, Some(id) if id.as_u64() == state.msg.0.as_u64()) {
-            if let Some(stopper) = state.stopper.take() {
+            if let Some(stopper) = state.stopper.lock().await.take() {
                 stopper.send(()).unwrap();
-                let db = data.get::<Database>().unwrap();
-                let mid: i64 = state.msg.0.into();
-                let datetime = chrono::offset::Utc::now();
-                sqlx::query!(
-                    r#"
-                        UPDATE bets
-                        SET stop_time = $1
-                        WHERE msg_id = $2
-                    "#,
-                    datetime,
-                    mid
-                )
-                .execute(db)
-                .await?;
+                data_scope!(ctx, db = Database, {
+                    let mid: i64 = state.msg.0.into();
+                    let datetime = chrono::offset::Utc::now();
+                    sqlx::query!(
+                        r#"
+                            UPDATE bets
+                            SET stop_time = $1
+                            WHERE msg_id = $2
+                        "#,
+                        datetime,
+                        mid
+                    )
+                    .execute(db)
+                    .await?;
+                });
                 intr_emsg!(int, ctx, "Bets stopped!").await?;
                 return Ok(());
             }
