@@ -34,6 +34,7 @@ pub struct BetData {
     pub ender: Arc<Mutex<Option<Sender<Option<bool>>>>>,
     pub stopper: Arc<Mutex<Option<Sender<()>>>>,
     pub msg: (MessageId, ChannelId),
+    pub blacklist: Vec<u64>,
     pub teams: TeamNames,
 }
 
@@ -167,7 +168,20 @@ async fn prompt_bet(
     int: Arc<MessageComponentInteraction>,
     msg: MessageId,
 ) -> anyhow::Result<()> {
-    let coins = data_scope!(ctx, db = Database, {
+    let coins = data_scope!(ctx, db = Database, state = CtxState, {
+        // this is disgusting lol
+        if state.blacklist.iter().any(|e| {
+            e == int.user.id.as_u64()
+            || int.member
+                .as_ref()
+                .unwrap()
+                .roles
+                .iter()
+                .any(|r| r.as_u64() == e)
+        }) {
+            intr_emsg!(int, ctx, "You're not allowed to bet in this match!").await?;
+            return Ok(());
+        }
         let discord_id: i64 = int.user.id.into();
         let msg_id: i64 = msg.into();
         let check = sqlx::query!(
@@ -421,6 +435,24 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
             .to_string()
     });
 
+    let blacklist = int.data.options
+        .iter()
+        .find(|o| o.name == "blacklist")
+        .and_then(|o| o.value.as_ref())
+        .and_then(|v| v.as_str())
+        .map_or_else(|| Ok(vec![]), |allv| {
+            allv.split(",")
+                .map(|i| i.parse::<u64>())
+                .collect()
+        });
+
+    if let Err(_) = blacklist {
+        intr_emsg!(int, ctx, "Invalid ID(s) in blacklist").await?;
+        return Ok(());
+    }
+
+    let blacklist = blacklist.unwrap();
+
     let msg = int
         .channel_id
         .send_message(&ctx.http, |rmsg| {
@@ -439,6 +471,7 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         ender: Arc::new(Mutex::new(Some(end_sender))),
         stopper: Arc::new(Mutex::new(Some(stop_sender))),
         msg: (msg.id, msg.channel_id),
+        blacklist,
         teams,
     };
     ctx.data
@@ -589,5 +622,11 @@ pub fn register(cmnd: &mut CreateApplicationCommand) -> &mut CreateApplicationCo
                 .description("Blue team name")
                 .kind(CommandOptionType::String)
                 .required(true)
+        })
+        .create_option(|optn| {
+            optn.name("blacklist")
+                .description("Blacklist certain roles or members from placing bets, separated by commas")
+                .kind(CommandOptionType::String)
+                .required(false)
         })
 }
