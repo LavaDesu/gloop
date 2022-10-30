@@ -442,12 +442,12 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         .and_then(|o| o.value.as_ref())
         .and_then(|v| v.as_str())
         .map_or_else(|| Ok(vec![]), |allv| {
-            allv.split(",")
+            allv.split(',')
                 .map(|i| i.parse::<u64>())
                 .collect()
         });
 
-    if let Err(_) = blacklist {
+    if blacklist.is_err() {
         intr_emsg!(int, ctx, "Invalid ID(s) in blacklist").await?;
         return Ok(());
     }
