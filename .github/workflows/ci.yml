@@ -34,9 +34,11 @@ jobs:
       - name: Setup toolchain
         uses: actions-rs/toolchain@v1
         with:
-            toolchain: nightly
+            toolchain: nightly-2022-10-03
             override: true
             components: clippy
+      - name: Setup cache
+        uses: Swatinem/rust-cache@v2
       - name: Lint
         uses: actions-rs/cargo@v1
         with:
