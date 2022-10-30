@@ -66,8 +66,8 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                 }
 
                 intr_emsg!(nint, ctx, "Invalid team input or bet ended during input").await?;
-                return Ok(());
             }
+            return Ok(());
         }
     }
 
