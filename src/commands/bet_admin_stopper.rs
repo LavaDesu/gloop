@@ -2,7 +2,6 @@ use serenity::builder::CreateApplicationCommand;
 use serenity::client::Context;
 use serenity::model::prelude::command::CommandType;
 use serenity::model::prelude::interaction::application_command::ApplicationCommandInteraction;
-use serenity::model::prelude::interaction::InteractionResponseType;
 use serenity::model::Permissions;
 
 use crate::commands::bet::CtxState;

@@ -86,16 +86,6 @@
     },
     "query": "\n                INSERT OR IGNORE INTO currency (discord_id, coins)\n                VALUES ($1, $2)\n            "
   },
-  "47ac2c54ad9021e85244e500fb847106026e8a5f688b348bfc248dab5a3cdfbe": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Right": 3
-      }
-    },
-    "query": "\n                UPDATE bets\n                SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,\n                    end_time = $1,\n                    blue_win = $2\n                WHERE msg_id = $3\n            "
-  },
   "52b61fdb051f1863eb25ea5042d9fad546891cad0348c3811f9c7ba1ff4e6a06": {
     "describe": {
       "columns": [],
@@ -221,5 +211,15 @@
       }
     },
     "query": "\n                SELECT coins\n                FROM currency\n                WHERE discord_id = $1\n                LIMIT 1\n            "
+  },
+  "f489cae665dbfc37398f229c23249f643f5a22f3b1fe505741175d61ea523e49": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Right": 3
+      }
+    },
+    "query": "\n                UPDATE bets\n                SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,\n                    end_time = $1,\n                    outcome = $2\n                WHERE msg_id = $3\n            "
   }
 }

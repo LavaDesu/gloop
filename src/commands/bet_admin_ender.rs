@@ -11,13 +11,15 @@ use serenity::model::Permissions;
 
 use crate::commands::bet::CtxState;
 
+use super::bet::Outcome;
+
 pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::Result<()> {
     let data = ctx.data.read().await;
 
     if let Some(state) = data.get::<CtxState>() {
         if matches!(int.data.target_id, Some(id) if id.as_u64() == state.msg.0.as_u64())
         {
-            let cid = format!("winner{}", int.id);
+            let cid = format!("outcome{}", int.id);
             let clone = cid.clone();
             int.create_interaction_response(&ctx, |resp| {
                 resp.kind(InteractionResponseType::Modal)
@@ -27,9 +29,9 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
                             .components(|cmp| {
                                 cmp.create_action_row(|row| {
                                     row.create_input_text(|text| {
-                                        text.custom_id("winner")
+                                        text.custom_id("outcome")
                                             .label("Winner")
-                                            .placeholder("0 to refund (no winner), 1 for Red, 2 for Blue")
+                                            .placeholder("0 for Cancelled, 1 for Red, 2 for Blue, 3 for Draw")
                                             .style(InputTextStyle::Short)
                                     })
                                 })
@@ -46,20 +48,21 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
 
             if let Some(nint) = nint {
                 // TODO: probably better way to do this?
-                let winner = &nint.data.components[0].components[0];
-                let winner = match winner {
+                let outcome = &nint.data.components[0].components[0];
+                let outcome = match outcome {
                     ActionRowComponent::InputText(e) => match e.value.as_str() {
-                        "0" => Some(None),
-                        "1" => Some(Some(false)),
-                        "2" => Some(Some(true)),
+                        "0" => Some(Outcome::Cancelled),
+                        "1" => Some(Outcome::Red),
+                        "2" => Some(Outcome::Blue),
+                        "3" => Some(Outcome::Draw),
                         _ => None,
                     },
                     _ => None,
                 };
 
-                if let Some(win) = winner {
+                if let Some(outcome) = outcome {
                     if let Some(ender) = state.ender.lock().await.take() {
-                        ender.send(win).unwrap();
+                        ender.send(outcome).unwrap();
                         intr_emsg!(nint, ctx, "Bets ended!").await?;
                         return Ok(());
                     }

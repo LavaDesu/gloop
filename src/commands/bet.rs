@@ -21,6 +21,52 @@ use tracing::Instrument;
 
 use crate::Database;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Team {
+    Red = 0,
+    Blue = 1
+}
+
+impl From<Team> for bool {
+    fn from(team: Team) -> Self {
+        team as usize == 1
+    }
+}
+
+impl From<Team> for usize {
+    fn from(team: Team) -> Self {
+        team as usize
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Red = 0,
+    Blue = 1,
+    Draw = -1,
+    Cancelled = -2
+}
+
+impl TryFrom<Outcome> for Team {
+    type Error = ();
+    fn try_from(outcome: Outcome) -> Result<Self, Self::Error> {
+        match outcome {
+            Outcome::Red => Ok(Team::Red),
+            Outcome::Blue => Ok(Team::Blue),
+            Outcome::Draw | Outcome::Cancelled => Err(())
+        }
+    }
+}
+
+impl From<Team> for Outcome {
+    fn from(team: Team) -> Self {
+        match team {
+            Team::Red => Self::Red,
+            Team::Blue => Self::Blue,
+        }
+    }
+}
+
 pub struct CtxState;
 
 impl TypeMapKey for CtxState {
@@ -31,7 +77,7 @@ type TeamNames = [String; 2];
 
 #[derive(Clone)]
 pub struct BetData {
-    pub ender: Arc<Mutex<Option<Sender<Option<bool>>>>>,
+    pub ender: Arc<Mutex<Option<Sender<Outcome>>>>,
     pub stopper: Arc<Mutex<Option<Sender<()>>>>,
     pub msg: (MessageId, ChannelId),
     pub blacklist: Vec<u64>,
@@ -339,7 +385,7 @@ async fn db_payout(
     ctx: &Context,
     db: &Pool<Sqlite>,
     msg: &Message,
-    winner: Option<bool>,
+    outcome: Outcome,
 ) -> anyhow::Result<()> {
     let msg_id: i64 = msg.id.into();
     let payout = calc_payout(db, msg_id).await?.0;
@@ -357,8 +403,8 @@ async fn db_payout(
     for row in events {
         let mut embd = CreateEmbed::default();
         embd.title("You got mail!");
-        if let Some(winner) = winner {
-            if row.target == winner {
+        if let Ok(winner) = Team::try_from(outcome) {
+            if row.target == bool::from(winner) {
                 let payout = payout[usize::from(winner)];
                 let coins = row.bet_placed as f64 * payout;
                 sqlx::query!(
@@ -564,12 +610,13 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         let datetime = chrono::offset::Utc::now();
         let mid: i64 = msg.id.into();
 
+        let end_res = end_res as i32;
         sqlx::query!(
             r#"
                 UPDATE bets
                 SET stop_time = CASE WHEN stop_time IS NULL THEN $1 ELSE stop_time END,
                     end_time = $1,
-                    blue_win = $2
+                    outcome = $2
                 WHERE msg_id = $3
             "#,
             datetime,
@@ -582,12 +629,16 @@ pub async fn run(ctx: &Context, int: &ApplicationCommandInteraction) -> anyhow::
         build_embed(db, msg.id.into(), &state.teams).await?
     });
 
-    if let Some(end_res) = end_res {
-        embed.colour(if end_res { Colour::BLUE } else { Colour::RED });
-        embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(end_res)]));
+    if let Ok(team) = Team::try_from(end_res) {
+        embed.colour(if team == Team::Blue { Colour::BLUE } else { Colour::RED });
+        embed.description(format!("Bets have concluded.\nThe winner is **{}**!", state.teams[usize::from(team)]));
     } else {
         embed.colour(Colour(0));
-        embed.description("Match is cancelled. Bets have been refunded.");
+        if end_res == Outcome::Cancelled {
+            embed.description("Match was cancelled. Bets have been refunded.");
+        } else {
+            embed.description("Match was a draw. Bets have been refunded.");
+        }
     }
 
     if let Err(why) = msg.channel_id
