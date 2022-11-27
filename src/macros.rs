@@ -31,6 +31,15 @@ macro_rules! data_scope {
 }
 
 #[macro_export]
+macro_rules! data_wscope {
+    ($ctx:expr, $($name:ident = $type:ident),+, {$($token:tt)*}) => {{
+        let mut data = $ctx.data.write().await;
+        $( let $name = data.get_mut::<$type>().unwrap(); )*
+        $( $token )*
+    }};
+}
+
+#[macro_export]
 macro_rules! get_data {
     ($data:expr, $type:ident) => {
         $data.get::<$type>().unwrap()
@@ -58,7 +67,7 @@ macro_rules! intr_emsg {
 macro_rules! intr_data {
     ($int:ident, $http:ident, $($data:tt)*) => {
         $int.create_interaction_response(&$http, |resp| {
-            resp.kind(InteractionResponseType::ChannelMessageWithSource)
+            resp.kind(serenity::model::prelude::interaction::InteractionResponseType::ChannelMessageWithSource)
                 .interaction_response_data($($data)*)
         })
     };
