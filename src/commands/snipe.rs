@@ -72,7 +72,7 @@ pub async fn recv_msg_update(ctx: Context, event: MessageUpdateEvent) {
                 entry.set(SnipeData {
                     author: (
                         format!("{}#{:04}", old.author.name, old.author.discriminator),
-                        old.author.avatar_url().unwrap_or(old.author.default_avatar_url())
+                        old.author.avatar_url().unwrap_or_else(|| old.author.default_avatar_url())
                     ),
                     content: SnipeContent::Edit(old.content.clone(), content.clone()),
                     timestamp: Utc::now()
@@ -94,7 +94,7 @@ pub async fn recv_msg_delete(ctx: Context, channel: ChannelId, msg_id: MessageId
             entry.set(SnipeData {
                 author: (
                     format!("{}#{:04}", msg.author.name, msg.author.discriminator),
-                    msg.author.avatar_url().unwrap_or(msg.author.default_avatar_url())
+                    msg.author.avatar_url().unwrap_or_else(|| msg.author.default_avatar_url())
                 ),
                 content: SnipeContent::Delete(msg.content.clone()),
                 timestamp: Utc::now()
