@@ -16,7 +16,7 @@
       pkgs = import nixpkgs {
         inherit system overlays;
       };
-      toolchain = pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default);
+      toolchain = pkgs.rust-bin.fromRustupToolchain { channel = "nightly-2022-10-07"; };
       naersk' = pkgs.callPackage naersk {
         cargo = toolchain;
         rustc = toolchain;
